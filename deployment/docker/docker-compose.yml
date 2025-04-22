@@ -1,0 +1,124 @@
+version: '3.9'
+name: credential-retrieval-service
+networks:
+    internal:
+      driver: bridge
+
+services:
+  # server:
+  #   image: ${IMAGE_REPO}:${IMAGE_TAG}
+  #   build:
+  #     context: ../../.
+  #     dockerfile: ./deployment/docker/Dockerfile
+  #   networks:
+  #     - internal
+  #   env_file:
+  #     - ../../.env
+  #   ports:
+  #     - "8080:8080"
+  #   depends_on:
+  #     nats:
+  #       condition: service_started
+  #     cassandra:
+  #       condition: service_healthy
+  #     initialize:
+  #       condition: service_completed_successfully
+
+  cassandra:
+    container_name: $PROJECT_NAME-cassandra
+    image: cassandra:latest
+    restart: always
+    hostname: cassandra
+    ports:
+      - "9042:9042"
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD-SHELL", "[ $$(nodetool statusgossip) = running ]"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+
+  initialize:
+    container_name: $PROJECT_NAME-initialize
+    image: nuvo/docker-cqlsh
+    command: cqlsh -f /cql/initialize.cql --cqlversion="3.4.6"
+    networks:
+      - internal
+    environment:
+      CQLSH_PORT: 9042
+      CQLVERSION: 3.4.6
+    volumes:
+      - "../../scripts/cql/initialize.cql:/cql/initialize.cql"
+    depends_on:
+      cassandra:
+        condition: service_healthy
+  nats:
+    networks:
+      - internal
+    image: nats:2.10.10
+    ports:
+      - 4222:4222
+  vault:
+    image: hashicorp/vault
+    ports:
+      - 8200:8200
+    networks:
+      - internal
+    environment:
+      - VAULT_DEV_ROOT_TOKEN_ID=test
+  init-secretengine:
+    image: curlimages/curl:latest
+    depends_on:
+      - vault
+    networks:
+      - internal
+    volumes:
+      - ./test.pem:/usr/local/bin/test.pem
+      - ./vault-init.sh:/usr/local/bin/vault-init.sh
+    entrypoint: ["sh", "-c", "
+      sleep 5 && /usr/local/bin/vault-init.sh"]
+  signer-service:
+    image: node-654e3bca7fbeeed18f81d7c7.ps-xaas.io/tsa/signer:ocm-wstack
+    ports:
+      - 8080:8080
+    networks:
+      - internal
+    environment:
+      - VAULT_ADRESS=http://vault:8200
+      - VAULT_TOKEN=test
+      - NATS_HOST=nats://nats:4222
+      - NATS_TOPIC=signer-topic
+      - NATS_STATUS_TOPIC=status.data.create
+      - NATS_STATUS_VERIFY_TOPIC=status.data.verify
+      - CLOUDEVENTPROVIDER_MESSAGING_PROTOCOL=nats
+      - CLOUDEVENTPROVIDER_MESSAGING_NATS_URL=nats:4222
+      - ENGINE_PATH=/opt/plugins/hashicorp-vault-provider.so
+  status:
+    image: node-654e3bca7fbeeed18f81d7c7.ps-xaas.io/ocm-wstack/status-list-service:main
+    networks:
+      - internal
+    ports:
+      - 8081:8080
+    environment:
+      - STATUSLISTSERVICE_DATABASE_PARAMS=sslmode:disable
+      - STATUSLISTSERVICE_DATABASE_HOST=postgres
+      - STATUSLISTSERVICE_NATS_URL=nats://nats:4222
+  postgres:
+    image: postgres:14-alpine
+    networks:
+      - internal
+    ports:
+      - 5432:5432
+    volumes:
+      - ~/apps/postgres:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_USER=postgres
+      - POSTGRES_DB=postgres
+
+
+
+
+  
+  

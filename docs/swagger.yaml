@@ -1,0 +1,308 @@
+definitions:
+  credential.AuthorizationCode:
+    properties:
+      issuer_state:
+        type: string
+    type: object
+  credential.CredentialConfiguration:
+    properties:
+      credential_definition:
+        $ref: '#/definitions/credential.CredentialDefinition'
+      credential_signing_alg_values_supported:
+        items:
+          type: string
+        type: array
+      cryptographic_binding_methods_supported:
+        items:
+          type: string
+        type: array
+      display:
+        items:
+          $ref: '#/definitions/credential.LocalizedCredential'
+        type: array
+      format:
+        type: string
+      proof_types_supported:
+        additionalProperties:
+          $ref: '#/definitions/credential.ProofType'
+        type: object
+      schema:
+        additionalProperties: true
+        description: /Out of OID Spec, but useful
+        type: object
+      scope:
+        type: string
+      topic:
+        description: Subject of the credential within the system
+        type: string
+    type: object
+  credential.CredentialDefinition:
+    properties:
+      credentialSubject:
+        additionalProperties:
+          $ref: '#/definitions/credential.CredentialSubject'
+        type: object
+      type:
+        items:
+          type: string
+        type: array
+    type: object
+  credential.CredentialOffer:
+    properties:
+      credential_offer:
+        type: string
+      credential_offer_uri:
+        type: string
+    type: object
+  credential.CredentialOfferParameters:
+    properties:
+      credential_issuer:
+        type: string
+      credentials:
+        items:
+          type: string
+        type: array
+      grants:
+        $ref: '#/definitions/credential.Grants'
+    type: object
+  credential.CredentialRespEnc:
+    properties:
+      alg_values_supported:
+        items:
+          type: string
+        type: array
+      enc_values_supported:
+        items:
+          type: string
+        type: array
+      encryption_required:
+        type: boolean
+    type: object
+  credential.CredentialResponse:
+    properties:
+      c_nonce:
+        type: string
+      c_nonce_expires_in:
+        type: integer
+      credential: {}
+      format:
+        type: string
+      transaction_id:
+        type: string
+    type: object
+  credential.CredentialSubject:
+    properties:
+      display:
+        $ref: '#/definitions/credential.Display'
+    type: object
+  credential.DescriptiveURL:
+    properties:
+      alternative_text:
+        type: string
+      url:
+        type: string
+    type: object
+  credential.Display:
+    properties:
+      locale:
+        type: string
+      name:
+        type: string
+    type: object
+  credential.Grants:
+    properties:
+      authorization_code:
+        $ref: '#/definitions/credential.AuthorizationCode'
+      urn:ietf:params:oauth:grant-type:pre-authorized_code:
+        $ref: '#/definitions/credential.PreAuthorizedCode'
+    type: object
+  credential.IssuerMetadata:
+    properties:
+      authorization_servers:
+        items:
+          type: string
+        type: array
+      batch_credential_endpoint:
+        type: string
+      credential_configurations_supported:
+        additionalProperties:
+          $ref: '#/definitions/credential.CredentialConfiguration'
+        type: object
+      credential_endpoint:
+        type: string
+      credential_issuer:
+        type: string
+      credential_response_encryption:
+        $ref: '#/definitions/credential.CredentialRespEnc'
+      deferred_credential_endpoint:
+        type: string
+      display:
+        items:
+          $ref: '#/definitions/credential.LocalizedCredential'
+        type: array
+    type: object
+  credential.LocalizedCredential:
+    properties:
+      background_color:
+        type: string
+      locale:
+        type: string
+      logo:
+        $ref: '#/definitions/credential.DescriptiveURL'
+      name:
+        type: string
+      text_color:
+        type: string
+    type: object
+  credential.PreAuthorizedCode:
+    properties:
+      pre-authorized_code:
+        type: string
+      user_pin_description:
+        type: string
+      user_pin_required:
+        type: boolean
+    type: object
+  credential.ProofType:
+    properties:
+      proof_signing_alg_values_supported:
+        items:
+          type: string
+        type: array
+    type: object
+  types.Acceptance:
+    properties:
+      accept:
+        type: boolean
+      encryptionKey:
+        items:
+          type: integer
+        type: array
+      holderGroup:
+        type: string
+      holderKey:
+        type: string
+      holderNamespace:
+        type: string
+    type: object
+  types.OfferingRow:
+    properties:
+      groupId:
+        type: string
+      metadata:
+        $ref: '#/definitions/credential.IssuerMetadata'
+      offering:
+        $ref: '#/definitions/credential.CredentialOfferParameters'
+      requestId:
+        type: string
+      status:
+        type: string
+      timestamp:
+        type: string
+    type: object
+host: localhost:8080
+info:
+  contact: {}
+  description: Service for handling credentials retrieval
+  license:
+    name: Apache 2.0
+    url: http://www.apache.org/licenses/LICENSE-2.0.html
+  title: Credential retrieval service API
+  version: "1.0"
+paths:
+  /clear/{groupId}/{requestId}:
+    delete:
+      consumes:
+      - application/json
+      description: handle clearance by tenantId, groupId and requestId
+      parameters:
+      - description: Tenant ID
+        in: path
+        name: tenantId
+        required: true
+        type: string
+      - description: Group ID
+        in: path
+        name: groupId
+        required: true
+        type: string
+      - description: Request ID
+        in: path
+        name: requestId
+        required: true
+        type: string
+      - description: Acceptance
+        in: body
+        name: acceptance
+        required: true
+        schema:
+          $ref: '#/definitions/types.Acceptance'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/credential.CredentialResponse'
+      summary: Handle clearance
+      tags:
+      - clearance
+  /list/{groupId}:
+    get:
+      consumes:
+      - application/json
+      description: get offerings by tenantId and groupId
+      parameters:
+      - description: Tenant ID
+        in: path
+        name: tenantId
+        required: true
+        type: string
+      - description: Group ID
+        in: path
+        name: groupId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/types.OfferingRow'
+            type: array
+      summary: Get offerings
+      tags:
+      - offerings
+  /retrieve/{groupId}:
+    put:
+      consumes:
+      - application/json
+      description: handle retrieval by tenantId and groupId
+      parameters:
+      - description: Tenant ID
+        in: path
+        name: tenantId
+        required: true
+        type: string
+      - description: Group ID
+        in: path
+        name: groupId
+        required: true
+        type: string
+      - description: Offering
+        in: body
+        name: offering
+        required: true
+        schema:
+          $ref: '#/definitions/credential.CredentialOffer'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: ID of created offering request
+      summary: Handle retrieval
+      tags:
+      - retrieval
+swagger: "2.0"

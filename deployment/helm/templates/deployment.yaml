@@ -1,0 +1,86 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: "{{ template "app.name" . }}"
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "app.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      {{- include "app.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "app.labels" . | nindent 8 }}
+      annotations:
+{{- if .Values.podAnnotations }}
+{{ toYaml .Values.podAnnotations | indent 8 }}
+{{- end }}
+    spec:
+      securityContext:
+        {{- include "app.securitycontext" . | nindent 8 }}
+      imagePullSecrets:
+        - name: {{ .Values.image.pullSecrets }}
+      containers:
+      - name: {{ .Chart.Name }}
+        image: "{{ .Values.image.repository }}/{{ .Values.image.name }}:{{ default .Chart.AppVersion .Values.image.tag }}"
+        imagePullPolicy: {{ .Values.image.pullPolicy | quote }}
+        env:
+          - name: "CREDENTIALRETRIEVAL_DISABLETLS"
+            value: "{{ .Values.config.disableTLS }}" 
+          - name: "CREDENTIALRETRIEVAL_OFFERING_TOPIC"
+            value: {{ .Values.config.offeringTopic }}
+          - name: "CREDENTIALRETRIEVAL_SIGNER_TOPIC"
+            value: {{ .Values.config.signerTopic }}
+          - name: "CREDENTIALRETRIEVAL_STORING_TOPIC"
+            value: {{ .Values.config.storageTopic }}
+          - name: "CREDENTIALRETRIEVAL_OFFERINGPOLICY"
+            value: {{ .Values.config.offeringPolicy }}
+          - name: "CREDENTIALRETRIEVAL_METADATAPOLICY"
+            value: {{ .Values.config.metadataPolicy }}
+          - name: "CREDENTIALRETRIEVAL_NATS_QUEUE_GROUP"
+            value: {{ .Values.config.nats.queuegroup }}      
+          - name: "CREDENTIALRETRIEVAL_NATS_REQUEST_TIMEOUT"
+            value: {{ .Values.config.nats.requestTimeOut }}  
+          - name: "CREDENTIALRETRIEVAL_NATS_URL"
+            value: {{ .Values.config.nats.url }} 
+          - name: "CREDENTIALRETRIEVAL_LISTEN_PORT"
+            value: "{{ .Values.service.port}}"
+          - name: "CREDENTIALRETRIEVAL_LISTEN_ADDR"
+            value: "{{ .Values.service.addr}}"
+          {{- if .Values.config.cassandra }} 
+          - name:  "CREDENTIALRETRIEVAL_CASSANDRA_HOST"
+            value:  {{ .Values.config.cassandra.hosts }}
+          - name:  "CREDENTIALRETRIEVAL_CASSANDRA_USER"
+            value:  {{ .Values.config.cassandra.user }}
+          - name:  "CREDENTIALRETRIEVAL_CASSANDRA_KEYSPACE"
+            value:  {{ .Values.config.cassandra.keyspace }}
+          - name:  "CREDENTIALRETRIEVAL_CASSANDRA_PASSWORD"
+            valueFrom:
+              secretKeyRef:
+                name: {{ .Values.config.cassandra.passwordSecret }}
+                key: {{ .Values.config.cassandra.passwordKey }}   
+          - name: "CREDENTIALRETRIEVAL_COUNTRY"
+            value:  {{ .Values.config.country }}
+          - name: "CREDENTIALRETRIEVAL_REGION"
+            value:  {{ .Values.config.region }} 
+          {{- end }}              
+        ports:
+        - name: http
+          containerPort: {{ .Values.service.port }}
+        readinessProbe:
+          httpGet:
+            path: /v1/metrics/health
+            port: {{ .Values.service.port }}
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          successThreshold: 2
+          failureThreshold: 2
+          timeoutSeconds: 5
