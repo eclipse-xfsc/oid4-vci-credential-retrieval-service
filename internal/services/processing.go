@@ -316,12 +316,12 @@ func fetchCredentialData(tenantId string, row types.OfferingRow, acceptance type
 		return nil, err
 	}
 	credKey := row.Offering.Credentials[0]
-	config, ok := metadata.CredentialConfigurationsSupported[credKey]
+	credConfig, ok := metadata.CredentialConfigurationsSupported[credKey]
 	if !ok {
 		err := fmt.Errorf("credential configuration for key '%s' not found – unsupported or misconfigured", credKey)
 		log.Error(err, "unsupported credential configuration")
 		return nil, err
 	}
-	cred.Format = config.Format
+	cred.Format = credConfig.Format
 	return cred, nil
 }
