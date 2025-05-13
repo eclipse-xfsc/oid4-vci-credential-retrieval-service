@@ -306,10 +306,10 @@ func fetchCredentialData(tenantId string, row types.OfferingRow, acceptance type
 	}
 
 	cred, err := metadata.CredentialRequest(req, *tok)
-	cred.Format = metadata.CredentialConfigurationsSupported[row.Offering.Credentials[0]].Format
 	if err != nil {
 		log.Error(err, "error during getting credential")
 		return nil, errors.Join(errors.New("error during getting credential"), err)
 	}
+	cred.Format = metadata.CredentialConfigurationsSupported[row.Offering.Credentials[0]].Format
 	return cred, nil
 }
