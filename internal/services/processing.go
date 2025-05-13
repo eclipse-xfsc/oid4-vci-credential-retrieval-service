@@ -322,6 +322,6 @@ func fetchCredentialData(tenantId string, row types.OfferingRow, acceptance type
 		log.Error(err, "unsupported credential configuration")
 		return nil, err
 	}
-	cred.Format = metadata.CredentialConfigurationsSupported[row.Offering.Credentials[0]].Format
+	cred.Format = config.Format
 	return cred, nil
 }
