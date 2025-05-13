@@ -306,10 +306,22 @@ func fetchCredentialData(tenantId string, row types.OfferingRow, acceptance type
 	}
 
 	cred, err := metadata.CredentialRequest(req, *tok)
-	cred.Format = metadata.CredentialConfigurationsSupported[row.Offering.Credentials[0]].Format
 	if err != nil {
 		log.Error(err, "error during getting credential")
 		return nil, errors.Join(errors.New("error during getting credential"), err)
 	}
+	if len(row.Offering.Credentials) == 0 {
+		err := errors.New("offering has no credentials – missing or misconfigured")
+		log.Error(err, "no credentials in offering")
+		return nil, err
+	}
+	credKey := row.Offering.Credentials[0]
+	credConfig, ok := metadata.CredentialConfigurationsSupported[credKey]
+	if !ok {
+		err := fmt.Errorf("credential configuration for key '%s' not found – unsupported or misconfigured", credKey)
+		log.Error(err, "unsupported credential configuration")
+		return nil, err
+	}
+	cred.Format = credConfig.Format
 	return cred, nil
 }
