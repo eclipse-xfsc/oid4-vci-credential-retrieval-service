@@ -6,9 +6,14 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write
   
 jobs:
   call-go-tests:
     uses: eclipse-xfsc/dev-ops/.github/workflows/go-test.yml@main
+    secrets: inherit
     with:
       go-version: '1.24'
