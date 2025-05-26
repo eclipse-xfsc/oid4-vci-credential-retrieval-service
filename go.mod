@@ -9,7 +9,7 @@ require (
 	github.com/eclipse-xfsc/nats-message-library v1.1.13
 	github.com/eclipse-xfsc/oid4-vci-vp-library v1.4.6
 	github.com/eclipse-xfsc/ssi-jwt v1.2.1
-	github.com/gin-gonic/gin v1.10.0
+	github.com/gin-gonic/gin v1.10.1
 	github.com/gocql/gocql v1.6.0
 	github.com/google/uuid v1.6.0
 	github.com/kelseyhightower/envconfig v1.4.0
