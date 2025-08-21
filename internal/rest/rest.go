@@ -164,6 +164,7 @@ func HandleClearance(ctx *gin.Context) {
 	resp, err := services.ClearOffering(tenantId, requestId, groupId, accept, ctx.Request.Context())
 
 	if err != nil {
+		log.Error(err, fmt.Sprintf("error occured while clear offering %s", error.Error()))
 		ctx.JSON(400, err.Error())
 		return
 	}
