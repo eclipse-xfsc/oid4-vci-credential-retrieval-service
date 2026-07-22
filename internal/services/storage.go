@@ -82,26 +82,31 @@ func ClearOffering(tenantId string, requestId string, groupId string, acceptance
 		return nil, errors.New("no record found")
 	}
 
+	if !acceptance.Accept {
+		// A rejected offering only needs to be removed. Do not run the retrieval
+		// pipeline: it would redeem the single-use pre-authorized code and fetch
+		// a credential that is thrown away, and any failure in that pipeline
+		// (expired code, missing holder key) would block the rejection.
+		err = deleteRejectedOffering(tenantId, requestId, groupId, ctx)
+		if err != nil {
+			return nil, errors.Join(errors.New("failed to delete rejected offering"), err)
+		}
+		return nil, nil
+	}
+
 	response, err := fetchCredentialData(tenantId, offs[0], acceptance)
 
 	if err != nil {
 		return nil, err
 	}
 
-	if acceptance.Accept {
-		err = StoreCredential(tenantId, requestId, groupId, *response, nil, ctx)
-		if err != nil {
-			return nil, errors.Join(errors.New("failed to store accepted credential"), err)
-		}
-		err = updateOfferingStatus(tenantId, requestId, groupId, acceptance.Accept, ctx)
-		if err != nil {
-			return nil, errors.Join(errors.New("failed to update offering status"), err)
-		}
-	} else {
-		err = deleteRejectedOffering(tenantId, requestId, groupId, ctx)
-		if err != nil {
-			return nil, errors.Join(errors.New("failed to delete rejected offering"), err)
-		}
+	err = StoreCredential(tenantId, requestId, groupId, *response, nil, ctx)
+	if err != nil {
+		return nil, errors.Join(errors.New("failed to store accepted credential"), err)
+	}
+	err = updateOfferingStatus(tenantId, requestId, groupId, acceptance.Accept, ctx)
+	if err != nil {
+		return nil, errors.Join(errors.New("failed to update offering status"), err)
 	}
 
 	return response, nil

@@ -53,7 +53,7 @@ config:
   disableTLS: true
   country: DE
   region: EU
-  signerTopic: signer-topic
+  signerTopic: sign
   storageTopic: storage
   offeringTopic: offering
   offeringPolicy:
