@@ -287,7 +287,7 @@ func fetchCredentialData(tenantId string, row types.OfferingRow, acceptance type
 		},
 	}
 
-	if tok.AuthorizationDetails != nil {
+	if tok.AuthorizationDetails != nil && len(tok.AuthorizationDetails.CredentialIdentifiers) > 0 {
 		req.CredentialIdentifier = tok.AuthorizationDetails.CredentialIdentifiers[0]
 	} else {
 		credConfig := row.MetaData.CredentialConfigurationsSupported[row.Offering.Credentials[0]]
