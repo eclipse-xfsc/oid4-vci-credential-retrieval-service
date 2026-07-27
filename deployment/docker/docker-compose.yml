@@ -78,22 +78,36 @@ services:
       - ./vault-init.sh:/usr/local/bin/vault-init.sh
     entrypoint: ["sh", "-c", "
       sleep 5 && /usr/local/bin/vault-init.sh"]
-  signer-service:
-    image: node-654e3bca7fbeeed18f81d7c7.ps-xaas.io/tsa/signer:ocm-wstack
-    ports:
-      - 8080:8080
-    networks:
+  vaultPlugin:
+    image: node-654e3bca7fbeeed18f81d7c7.ps-xaas.io/tsa/crypto-provider-hashicorp-vault-plugin:v2.0.5
+    networks: 
       - internal
+    ports:
+      - 50051:50051
     environment:
       - VAULT_ADRESS=http://vault:8200
       - VAULT_TOKEN=test
-      - NATS_HOST=nats://nats:4222
-      - NATS_TOPIC=signer-topic
-      - NATS_STATUS_TOPIC=status.data.create
-      - NATS_STATUS_VERIFY_TOPIC=status.data.verify
-      - CLOUDEVENTPROVIDER_MESSAGING_PROTOCOL=nats
-      - CLOUDEVENTPROVIDER_MESSAGING_NATS_URL=nats:4222
-      - ENGINE_PATH=/opt/plugins/hashicorp-vault-provider.so
+      - CRYPTO_GRPC_ADDR=0.0.0.0:50051
+  signer:
+    image: node-654e3bca7fbeeed18f81d7c7.ps-xaas.io/tsa/signer:v2.0.6-alpha
+    networks:
+      - internal
+    ports:
+      - '8888:8080'
+    depends_on:
+      - nats
+    environment:
+        SDJWT_SERVICE_URL: http://sdjwt:3000
+        VAULT_ADRESS: http://vault:8200
+        VAULT_TOKEN: test
+        GRPC_ADRESS: 
+        NATS_HOST: nats://nats:4222
+        NATS_TOPIC: signer-topic
+        NATS_STATUS_TOPIC: status.data.create
+        NATS_STATUS_VERIFY_TOPIC: status.data.verify
+        CLOUDEVENTPROVIDER_MESSAGING_PROTOCOL: nats
+        CLOUDEVENTPROVIDER_MESSAGING_NATS_URL: nats://nats:4222
+        CRYPTO_GRPC_ADDR: vaultPlugin:50051
   status:
     image: node-654e3bca7fbeeed18f81d7c7.ps-xaas.io/ocm-wstack/status-list-service:main
     networks:

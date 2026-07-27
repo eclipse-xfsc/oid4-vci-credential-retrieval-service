@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/eclipse-xfsc/cloud-event-provider"
+	cloudeventprovider "github.com/eclipse-xfsc/cloud-event-provider"
 	logPkg "github.com/eclipse-xfsc/microservice-core-go/pkg/logr"
 	retrieval "github.com/eclipse-xfsc/nats-message-library"
 	"github.com/eclipse-xfsc/nats-message-library/common"
@@ -288,7 +288,11 @@ func fetchCredentialData(tenantId string, row types.OfferingRow, acceptance type
 	}
 
 	if tok.AuthorizationDetails != nil {
-		req.CredentialIdentifier = tok.AuthorizationDetails.CredentialIdentifiers[0]
+		if tok.AuthorizationDetails.CredentialIdentifiers != nil && len(tok.AuthorizationDetails.CredentialIdentifiers) > 0 {
+			req.CredentialIdentifier = tok.AuthorizationDetails.CredentialIdentifiers[0]
+		}
+		req.CredentialConfigurationId = tok.AuthorizationDetails.CredentialConfigurationID
+
 	} else {
 		credConfig := row.MetaData.CredentialConfigurationsSupported[row.Offering.Credentials[0]]
 		req.Format = credConfig.Format
@@ -297,7 +301,11 @@ func fetchCredentialData(tenantId string, row types.OfferingRow, acceptance type
 		}
 
 		if credConfig.Claims != nil {
-			req.Claims = credConfig.Claims
+			claims := make([]oauth.Claim, 0)
+			for _, c := range credConfig.Claims {
+				claims = append(claims, c.Claim)
+			}
+			req.Claims = claims
 		}
 
 		if credConfig.Order != nil {
