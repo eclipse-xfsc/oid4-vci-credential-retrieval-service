@@ -74,7 +74,7 @@ func Run(ctx context.Context, session connection.SessionInterface, cfg Config) e
 
 func ensureMigrationTable(ctx context.Context, session connection.SessionInterface, table string) error {
 	statement := fmt.Sprintf(`
-CREATE TABLE IF NOT EXISTS %s (
+CREATE TABLE IF NOT EXISTS ocm.%s (
 	version int PRIMARY KEY,
 	name text,
 	checksum text,
@@ -100,7 +100,7 @@ func applyMigration(
 	)
 
 	query := fmt.Sprintf(
-		"SELECT checksum, dirty FROM %s WHERE version = ?",
+		"SELECT checksum, dirty FROM ocm.%s WHERE version = ?",
 		table,
 	)
 	err := session.Query(query, migration.Version).
@@ -137,7 +137,7 @@ func applyMigration(
 	}
 
 	markDirty := fmt.Sprintf(
-		"INSERT INTO %s (version, name, checksum, applied_at, dirty) VALUES (?, ?, ?, ?, ?)",
+		"INSERT INTO ocm.%s (version, name, checksum, applied_at, dirty) VALUES (?, ?, ?, ?, ?)",
 		table,
 	)
 	if err := session.Query(
@@ -171,7 +171,7 @@ func applyMigration(
 	}
 
 	markClean := fmt.Sprintf(
-		"UPDATE %s SET dirty = ?, applied_at = ? WHERE version = ?",
+		"UPDATE ocm.%s SET dirty = ?, applied_at = ? WHERE version = ?",
 		table,
 	)
 	if err := session.Query(
