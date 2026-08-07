@@ -20,6 +20,14 @@ podAnnotations:
     inject.xfsc.io/needs: "nats,cassandra,storage,signer"
     inject.xfsc.io/env-prefix: "CREDENTIALRETRIEVAL" 
 
+resourceProvider:
+  enabled: true
+  name: ""
+  scope: Cluster
+  description: Retrieval Service
+  allow:
+    namespaces: []
+
 service:
   port: 8080
   type: ClusterIP
