@@ -48,6 +48,9 @@ spec:
             # Allgemeine Konfiguration
             # ------------------------------------------------------------
 
+            - name: CREDENTIALRETRIEVAL_MIGRATIONS_TABLE
+              value: "retrieval_schema_migration"
+
             - name: CREDENTIALRETRIEVAL_DISABLETLS
               value: {{ .Values.config.disableTLS | quote }}
 
