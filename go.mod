@@ -20,14 +20,14 @@ require (
 )
 
 require (
-	github.com/Azure/go-amqp v1.5.0 // indirect
+	github.com/Azure/go-amqp v0.17.0 // indirect
 	github.com/IBM/sarama v1.46.3 // indirect
 	github.com/KyleBanks/depth v1.2.1 // indirect
 	github.com/MichaelFraser99/go-sd-jwt v1.4.0 // indirect
 	github.com/bytedance/gopkg v0.1.3 // indirect
 	github.com/bytedance/sonic v1.14.2 // indirect
 	github.com/bytedance/sonic/loader v0.4.0 // indirect
-	github.com/cloudevents/sdk-go/protocol/amqp/v2 v2.16.2 // indirect
+	github.com/cloudevents/sdk-go/protocol/amqp/v2 v2.15.2 // indirect
 	github.com/cloudevents/sdk-go/protocol/kafka_sarama/v2 v2.16.2 // indirect
 	github.com/cloudevents/sdk-go/protocol/mqtt_paho/v2 v2.0.0-20251125184210-ee1cae0e0f5d // indirect
 	github.com/cloudevents/sdk-go/protocol/nats/v2 v2.16.2 // indirect
