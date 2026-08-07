@@ -1,7 +1,9 @@
 package config
 
 import (
-	"github.com/eclipse-xfsc/cloud-event-provider"
+	"time"
+
+	cloudeventprovider "github.com/eclipse-xfsc/cloud-event-provider"
 	configPkg "github.com/eclipse-xfsc/microservice-core-go/pkg/config"
 )
 
@@ -23,6 +25,12 @@ type CredentialRetrievalConfig struct {
 		User     string `mapstructure:"user, omitempty" envconfig:"USER"`
 		Password string `mapstructure:"password, omitempty" envconfig:"PASSWORD"`
 	} `mapstructure:"cassandra" envconfig:"CASSANDRA"`
+
+	Migrations struct {
+		Enabled bool          `mapstructure:"enabled" envconfig:"ENABLED" default:"true"`
+		Table   string        `mapstructure:"table" envconfig:"TABLE" default:"schema_migrations"`
+		Timeout time.Duration `mapstructure:"timeout" envconfig:"TIMEOUT" default:"2m"`
+	} `mapstructure:"migrations" envconfig:"MIGRATIONS"`
 }
 
 var CurrentCredentialRetrievalConfig CredentialRetrievalConfig

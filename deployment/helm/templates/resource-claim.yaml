@@ -1,0 +1,24 @@
+{{- $secretName := printf "%s-cassandra-credentials" .Release.Name -}}
+{{- $injectionEnabled := eq (dig "inject.xfsc.io/enabled" "false" .Values.podAnnotations) "true" -}}
+
+{{- if $injectionEnabled }}
+apiVersion: resources.xfsc.io/v1alpha1
+kind: ResourceClaim
+metadata:
+  name: {{ printf "%s-cassandra-resource-claim" .Release.Name | quote }}
+  namespace: {{ .Release.Namespace }}
+spec:
+  type: cassandra
+
+  providerRef:
+    name: cassandra
+
+  externalSecretRef:
+    name: {{ $secretName | quote }}
+
+  parameters:
+    keyspace: ocm
+    replicationFactor: 1
+    durableWrites: true
+    datacenter: dc1
+{{- end }}
