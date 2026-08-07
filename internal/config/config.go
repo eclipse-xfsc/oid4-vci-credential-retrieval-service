@@ -20,7 +20,7 @@ type CredentialRetrievalConfig struct {
 
 	Nats      cloudeventprovider.NatsConfig `envconfig:"NATS"`
 	Cassandra struct {
-		Host     string `mapstructure:"host" envconfig:"HOST"`
+		Hosts    string `mapstructure:"host" envconfig:"HOSTS"`
 		KeySpace string `mapstructure:"keyspace" envconfig:"KEYSPACE"`
 		User     string `mapstructure:"user, omitempty" envconfig:"USER"`
 		Password string `mapstructure:"password, omitempty" envconfig:"PASSWORD"`

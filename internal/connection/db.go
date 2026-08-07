@@ -75,7 +75,7 @@ func NewQuery(query *gocql.Query) QueryInterface {
 func Connection(logger *logPkg.Logger) (SessionInterface, error) {
 	cassandraConfig := config.CurrentCredentialRetrievalConfig.Cassandra
 
-	host := cassandraConfig.Host
+	host := cassandraConfig.Hosts
 	keyspace := cassandraConfig.KeySpace
 
 	logger.Info("connecting db", "KEYSPACE", keyspace, "HOSTS", host)
