@@ -120,38 +120,21 @@ spec:
 
             # Storage
 
-            - name: CREDENTIALRETRIEVAL_STORING_TOPIC
+            - name: CREDENTIALRETRIEVAL_STORAGE_TOPIC
               value: {{ .Values.config.storageTopic | quote }}
 
             {{- else }}
+            - name: CREDENTIALRETRIEVAL_CASSANDRA_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ printf "%s-cassandra-credentials" .Release.Name | quote }}
+                  key: username
 
-            # ------------------------------------------------------------
-            # Injection aktiviert
-            # NATS, Cassandra, Signer und Storage werden vom Operator
-            # injiziert. Nur service-spezifische Topics bleiben lokal.
-            # ------------------------------------------------------------
-
-            # NATS
-            # NATS_URL, NATS_HOST und weitere Verbindungswerte
-            # werden durch den ResourceProvider injiziert.
-
-            - name: CREDENTIALRETRIEVAL_NATS_REQUEST_TIMEOUT
-              value: {{ .Values.config.nats.requestTimeOut | quote }}
-
-            # Cassandra
-            # Host, User, Passwort und Keyspace werden injiziert.
-
-            # Signer
-            # URL wird injiziert, Topic bleibt service-spezifisch.
-
-            - name: CREDENTIALRETRIEVAL_SIGNER_TOPIC
-              value: {{ .Values.config.signerTopic | quote }}
-
-            # Storage
-            # URL wird injiziert, Topic bleibt service-spezifisch.
-
-            - name: CREDENTIALRETRIEVAL_STORING_TOPIC
-              value: {{ .Values.config.storageTopic | quote }}
+            - name: CREDENTIALRETRIEVAL_CASSANDRA_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ printf "%s-cassandra-credentials" .Release.Name | quote }}
+                  key: password
 
             {{- end }}
 

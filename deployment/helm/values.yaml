@@ -58,7 +58,6 @@ config:
   country: DE
   region: EU
   signerTopic: signer-topic
-  storageTopic: storage
   offeringTopic: offering
   offeringPolicy:
   metadataPolicy:

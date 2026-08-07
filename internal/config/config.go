@@ -12,7 +12,7 @@ type CredentialRetrievalConfig struct {
 	Country        string `mapstructure:"country" envconfig:"COUNTRY"`
 	Region         string `mapstructure:"region" envconfig:"REGION"`
 	OfferingTopic  string `envconfig:"OFFERING_TOPIC"`
-	StoringTopic   string `envconfig:"STORING_TOPIC"`
+	StoringTopic   string `envconfig:"STORAGE_TOPIC"`
 	SignerTopic    string `envconfig:"SIGNER_TOPIC"`
 	OfferingPolicy string `envconfig:"OFFERINGPOLICY"`
 	MetadataPolicy string `envconfig:"METADATAPOLICY"`
