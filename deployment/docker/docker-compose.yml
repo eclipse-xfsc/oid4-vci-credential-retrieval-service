@@ -124,7 +124,7 @@ services:
     entrypoint:
       - sh
       - -ec
-      - /usr/local/bin/vault-init.sh
+      - sh /usr/local/bin/vault-init.sh
     networks:
       - internal
 
