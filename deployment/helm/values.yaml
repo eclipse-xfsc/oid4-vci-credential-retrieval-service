@@ -15,7 +15,19 @@ image:
   # -- Image pull secret when internal image is used
   #pullSecrets: key
 
-podAnnotations: {}
+podAnnotations:
+    inject.xfsc.io/enabled: "false"
+    inject.xfsc.io/needs: "nats,cassandra,storage,signer"
+    inject.xfsc.io/env-prefix: "CREDENTIALRETRIEVAL" 
+
+resourceProvider:
+  enabled: true
+  name: ""
+  scope: Cluster
+  description: Retrieval Service
+  allow:
+    namespaces: []
+
 service:
   port: 8080
   type: ClusterIP
@@ -34,7 +46,7 @@ security:
 
 
 ingress:
-  enabled: true
+  enabled: false
   annotations:
     nginx.org/client-max-body-size: 2K #Maximum Size of Credentials which are uploadable
     nginx.ingress.kubernetes.io/rewrite-target: /v1/tenants/tenant_space/offering/$2
@@ -49,12 +61,12 @@ ingress:
     - secretName: xfsc-wildcard
       hosts:
         - cloud-wallet.xfsc.dev
+        
 config:
   disableTLS: true
   country: DE
   region: EU
   signerTopic: signer-topic
-  storageTopic: storage
   offeringTopic: offering
   offeringPolicy:
   metadataPolicy:

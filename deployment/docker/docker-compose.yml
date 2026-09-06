@@ -1,8 +1,4 @@
-version: '3.9'
-name: credential-retrieval-service
-networks:
-    internal:
-      driver: bridge
+version: "3.9"
 
 services:
   # server:
@@ -10,129 +6,214 @@ services:
   #   build:
   #     context: ../../.
   #     dockerfile: ./deployment/docker/Dockerfile
-  #   networks:
-  #     - internal
   #   env_file:
   #     - ../../.env
   #   ports:
   #     - "8080:8080"
   #   depends_on:
-  #     nats:
-  #       condition: service_started
-  #     cassandra:
-  #       condition: service_healthy
-  #     initialize:
+  #     cassandra-init:
   #       condition: service_completed_successfully
+  #     crypto-provider:
+  #       condition: service_started
+  #     nats:
+  #       condition: service_healthy
+  #   networks:
+  #     - internal
 
   cassandra:
-    container_name: $PROJECT_NAME-cassandra
-    image: cassandra:latest
-    restart: always
+    image: cassandra:5.0
     hostname: cassandra
+    restart: unless-stopped
     ports:
       - "9042:9042"
-    networks:
-      - internal
-    healthcheck:
-      test: ["CMD-SHELL", "[ $$(nodetool statusgossip) = running ]"]
-      interval: 30s
-      timeout: 10s
-      retries: 10
-
-  initialize:
-    container_name: $PROJECT_NAME-initialize
-    image: nuvo/docker-cqlsh
-    command: cqlsh -f /cql/initialize.cql --cqlversion="3.4.6"
-    networks:
-      - internal
-    environment:
-      CQLSH_PORT: 9042
-      CQLVERSION: 3.4.6
     volumes:
-      - "../../scripts/cql/initialize.cql:/cql/initialize.cql"
+      - cassandra-data:/var/lib/cassandra
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - cqlsh 127.0.0.1 9042 -e "DESCRIBE KEYSPACES" || exit 1
+      interval: 10s
+      timeout: 10s
+      retries: 30
+      start_period: 30s
+    networks:
+      - internal
+
+  cassandra-init:
+    image: cassandra:5.0
+    restart: "no"
     depends_on:
       cassandra:
         condition: service_healthy
+    command:
+      - /bin/bash
+      - -ec
+      - |
+        echo "Initializing Cassandra..."
+
+        cqlsh cassandra 9042 <<'CQL'
+        CREATE KEYSPACE IF NOT EXISTS ocm
+        WITH replication = {
+          'class': 'SimpleStrategy',
+          'replication_factor': 1
+        };
+
+        USE ocm;
+        CQL
+
+        echo "Cassandra initialization completed."
+    networks:
+      - internal
+
   nats:
+    image: nats:2.10-alpine
+    restart: unless-stopped
+    command:
+      - "--http_port"
+      - "8222"
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+    healthcheck:
+      test:
+        - CMD
+        - wget
+        - -qO-
+        - http://127.0.0.1:8222/healthz
+      interval: 5s
+      timeout: 3s
+      retries: 12
     networks:
       - internal
-    image: nats:2.10.10
-    ports:
-      - 4222:4222
-  vault:
-    image: hashicorp/vault
-    ports:
-      - 8200:8200
-    networks:
-      - internal
+
+  openbao:
+    image: openbao/openbao:latest
+    restart: unless-stopped
+    command: server -dev -dev-root-token-id=dev-root-token
+    cap_add:
+      - IPC_LOCK
     environment:
-      - VAULT_DEV_ROOT_TOKEN_ID=test
+      BAO_ADDR: http://0.0.0.0:8200
+      BAO_API_ADDR: http://openbao:8200
+    ports:
+      - "8200:8200"
+    healthcheck:
+      test:
+        - CMD
+        - wget
+        - -qO-
+        - http://127.0.0.1:8200/v1/sys/health
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    networks:
+      - internal
+
   init-secretengine:
     image: curlimages/curl:latest
+    restart: "no"
     depends_on:
-      - vault
+      openbao:
+        condition: service_healthy
+    environment:
+      VAULT_ADDR: http://openbao:8200
+      VAULT_TOKEN: dev-root-token
+    volumes:
+      - ./test.pem:/usr/local/bin/test.pem:ro
+      - ./vault-init.sh:/usr/local/bin/vault-init.sh:ro
+    entrypoint:
+      - sh
+      - -ec
+      - sh /usr/local/bin/vault-init.sh
     networks:
       - internal
-    volumes:
-      - ./test.pem:/usr/local/bin/test.pem
-      - ./vault-init.sh:/usr/local/bin/vault-init.sh
-    entrypoint: ["sh", "-c", "
-      sleep 5 && /usr/local/bin/vault-init.sh"]
-  vaultPlugin:
-    image: node-654e3bca7fbeeed18f81d7c7.ps-xaas.io/tsa/crypto-provider-hashicorp-vault-plugin:v2.0.5
-    networks: 
-      - internal
-    ports:
-      - 50051:50051
+
+  crypto-provider:
+    image: node-654e3bca7fbeeed18f81d7c7.de-west-1.xaas.plus.cloud/tsa/crypto-provider-hashicorp-vault-plugin@sha256:b65581777a9fc28d3aac5757e7125d8e996132753826d55740207166a3aff0bd
+    restart: unless-stopped
+    depends_on:
+      openbao:
+        condition: service_healthy
+      init-secretengine:
+        condition: service_completed_successfully
     environment:
-      - VAULT_ADRESS=http://vault:8200
-      - VAULT_TOKEN=test
-      - CRYPTO_GRPC_ADDR=0.0.0.0:50051
+      CRYPTO_GRPC_ADDR: 0.0.0.0:50051
+      VAULT_ADRESS: http://openbao:8200
+      VAULT_TOKEN: dev-root-token
+    expose:
+      - "50051"
+    ports:
+      - "50051:50051"
+    networks:
+      - internal
+
   signer:
     image: node-654e3bca7fbeeed18f81d7c7.ps-xaas.io/tsa/signer:v2.0.6-alpha
-    networks:
-      - internal
-    ports:
-      - '8888:8080'
+    restart: unless-stopped
     depends_on:
-      - nats
+      nats:
+        condition: service_healthy
+      crypto-provider:
+        condition: service_started
+    ports:
+      - "8888:8080"
     environment:
-        SDJWT_SERVICE_URL: http://sdjwt:3000
-        VAULT_ADRESS: http://vault:8200
-        VAULT_TOKEN: test
-        GRPC_ADRESS: 
-        NATS_HOST: nats://nats:4222
-        NATS_TOPIC: signer-topic
-        NATS_STATUS_TOPIC: status.data.create
-        NATS_STATUS_VERIFY_TOPIC: status.data.verify
-        CLOUDEVENTPROVIDER_MESSAGING_PROTOCOL: nats
-        CLOUDEVENTPROVIDER_MESSAGING_NATS_URL: nats://nats:4222
-        CRYPTO_GRPC_ADDR: vaultPlugin:50051
-  status:
-    image: node-654e3bca7fbeeed18f81d7c7.ps-xaas.io/ocm-wstack/status-list-service:main
+      SDJWT_SERVICE_URL: http://sdjwt:3000
+      VAULT_ADRESS: http://openbao:8200
+      VAULT_TOKEN: dev-root-token
+      GRPC_ADRESS: ""
+      NATS_HOST: nats://nats:4222
+      NATS_TOPIC: signer-topic
+      NATS_STATUS_TOPIC: status.data.create
+      NATS_STATUS_VERIFY_TOPIC: status.data.verify
+      CLOUDEVENTPROVIDER_MESSAGING_PROTOCOL: nats
+      CLOUDEVENTPROVIDER_MESSAGING_NATS_URL: nats://nats:4222
+      CRYPTO_GRPC_ADDR: crypto-provider:50051
     networks:
       - internal
-    ports:
-      - 8081:8080
-    environment:
-      - STATUSLISTSERVICE_DATABASE_PARAMS=sslmode:disable
-      - STATUSLISTSERVICE_DATABASE_HOST=postgres
-      - STATUSLISTSERVICE_NATS_URL=nats://nats:4222
+
   postgres:
     image: postgres:14-alpine
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_USER: postgres
+      POSTGRES_DB: postgres
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U postgres -d postgres
+      interval: 5s
+      timeout: 5s
+      retries: 12
     networks:
       - internal
+
+  status:
+    image: node-654e3bca7fbeeed18f81d7c7.ps-xaas.io/ocm-wstack/status-list-service:main
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
     ports:
-      - 5432:5432
-    volumes:
-      - ~/apps/postgres:/var/lib/postgresql/data
+      - "8081:8080"
     environment:
-      - POSTGRES_PASSWORD=postgres
-      - POSTGRES_USER=postgres
-      - POSTGRES_DB=postgres
+      STATUSLISTSERVICE_DATABASE_PARAMS: sslmode=disable
+      STATUSLISTSERVICE_DATABASE_HOST: postgres
+      STATUSLISTSERVICE_NATS_URL: nats://nats:4222
+    networks:
+      - internal
 
+volumes:
+  cassandra-data:
+  postgres-data:
 
-
-
-  
-  
+networks:
+  internal:
+    driver: bridge

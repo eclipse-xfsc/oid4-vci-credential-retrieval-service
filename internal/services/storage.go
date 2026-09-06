@@ -20,7 +20,7 @@ func StoreOffering(tenantId string, offering types.OfferingRow) error {
 	country := common.GetEnvironment().GetCountry()
 	region := common.GetEnvironment().GetRegion()
 	partition := common.GetEnvironment().GetAccountPartition(offering.GroupId)
-	queryString := fmt.Sprintf(`UPDATE %s.offerings SET 
+	queryString := fmt.Sprintf(`UPDATE ocm.offerings SET 
 			last_update_timestamp=toTimestamp(now()),
 			type=?,
 			metadata=?,
@@ -31,6 +31,7 @@ func StoreOffering(tenantId string, offering types.OfferingRow) error {
 				region=? AND
 				country=? AND
 				groupId=? AND
+				tenantId=%s AND
 				requestId=?;`, tenantId)
 
 	bMeta, err := json.Marshal(offering.MetaData)
@@ -56,19 +57,21 @@ func StoreOffering(tenantId string, offering types.OfferingRow) error {
 }
 
 func GetOfferings(tenantId string, groupId string) ([]types.OfferingRow, error) {
-	queryString := fmt.Sprintf(`SELECT requestId,metadata,offerParams,status,last_update_timestamp FROM %s.offerings WHERE partition=? AND 
+	queryString := fmt.Sprintf(`SELECT requestId,metadata,offerParams,status,last_update_timestamp FROM ocm.offerings WHERE partition=? AND 
 																					region=? AND 
 																					country=? AND 
-																					groupId=?;`, tenantId)
+																					groupId=? AND
+																					tenantId=%s;`, tenantId)
 	return getOfferings(tenantId, groupId, queryString)
 }
 
 func ClearOffering(tenantId string, requestId string, groupId string, acceptance types.Acceptance, ctx context.Context) (*credential.CredentialResponse, error) {
 
-	queryString := fmt.Sprintf(`SELECT requestId,metadata,offerParams,status,last_update_timestamp FROM %s.offerings WHERE partition=? AND 
+	queryString := fmt.Sprintf(`SELECT requestId,metadata,offerParams,status,last_update_timestamp FROM ocm.offerings WHERE partition=? AND 
 																					region=? AND 
 																					country=? AND 
-																					groupId=? AND
+																					groupId=? AND 
+																					tenantId=%s AND
 																					requestId='%s';`, tenantId, requestId)
 	//set status in table to rejected accepted, if accepted send message to storage service
 
@@ -110,12 +113,13 @@ func ClearOffering(tenantId string, requestId string, groupId string, acceptance
 func deleteRejectedOffering(tenantId string, requestId string, groupId string, ctx context.Context) error {
 	queryString := fmt.Sprintf(`
 			DELETE
-			FROM %s.offerings
+			FROM ocm.offerings
 			WHERE
 			    partition = ? AND
 			    region = ? AND
 			    country = ? AND
 			    groupid = ? AND
+				tenantId=%s AND
 			    requestid = ?;`,
 		tenantId,
 	)
@@ -136,13 +140,14 @@ func updateOfferingStatus(tenantId string, requestId string, groupId string, acc
 	}
 
 	queryString := fmt.Sprintf(`
-			UPDATE %s.offerings SET
+			UPDATE ocm.offerings SET
 			status=?
 			WHERE
 			    partition = ? AND
 			    region = ? AND
 			    country = ? AND
 			    groupid = ? AND
+				tenantId=%s AND
 			    requestid = ?;`,
 		tenantId,
 	)

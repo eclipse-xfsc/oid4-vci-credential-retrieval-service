@@ -1,0 +1,18 @@
+{{- if eq (index .Values.podAnnotations "inject.xfsc.io/enabled") "true" }}
+apiVersion: resources.xfsc.io/v1alpha1
+kind: ResourceProvider
+metadata:
+  name: retrieval
+spec:
+  type: retrieval
+  scope: {{ .Values.resourceProvider.scope | quote }}
+  description: {{ .Values.resourceProvider.description | quote }}
+{{- with .Values.resourceProvider.allow.namespaces }}
+  allow:
+    namespaces:
+{{ toYaml . | indent 6 }}
+{{- end }}
+  outputs:
+    env:
+      OFFERING_TOPIC: {{ .Values.config.offeringTopic | quote }}  
+{{- end }}

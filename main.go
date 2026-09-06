@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
+	"time"
 
 	ctxPkg "github.com/eclipse-xfsc/microservice-core-go/pkg/ctx"
 	logPkg "github.com/eclipse-xfsc/microservice-core-go/pkg/logr"
@@ -12,6 +14,7 @@ import (
 	"github.com/eclipse-xfsc/oid4-vci-credential-retrieval-service/internal/config"
 	"github.com/eclipse-xfsc/oid4-vci-credential-retrieval-service/internal/connection"
 	"github.com/eclipse-xfsc/oid4-vci-credential-retrieval-service/internal/messaging"
+	"github.com/eclipse-xfsc/oid4-vci-credential-retrieval-service/internal/migration"
 	"github.com/eclipse-xfsc/oid4-vci-credential-retrieval-service/internal/rest"
 	"github.com/gin-gonic/gin"
 	"github.com/kelseyhightower/envconfig"
@@ -60,6 +63,19 @@ func main() {
 	}
 
 	common.GetEnvironment().SetSession(session)
+
+	migrationTimeout := config.CurrentCredentialRetrievalConfig.Migrations.Timeout
+	if migrationTimeout <= 0 {
+		migrationTimeout = 2 * time.Minute
+	}
+	if err := migration.Run(context.Background(), common.GetEnvironment().GetSession(), migration.Config{
+		Enabled: config.CurrentCredentialRetrievalConfig.Migrations.Enabled,
+		Table:   config.CurrentCredentialRetrievalConfig.Migrations.Table,
+		Timeout: migrationTimeout,
+	}); err != nil {
+		logger.Error(err, "Failed applying Cassandra migrations")
+		os.Exit(1)
+	}
 
 	brokerClient := messaging.StartMessageSubscription(logger)
 	defer brokerClient.Close()
