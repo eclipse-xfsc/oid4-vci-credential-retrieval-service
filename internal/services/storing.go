@@ -3,17 +3,18 @@ package services
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
-	"github.com/eclipse-xfsc/cloud-event-provider"
+	cloudeventprovider "github.com/eclipse-xfsc/cloud-event-provider"
 	ctxPkg "github.com/eclipse-xfsc/microservice-core-go/pkg/ctx"
 	logPkg "github.com/eclipse-xfsc/microservice-core-go/pkg/logr"
-	"github.com/eclipse-xfsc/nats-message-library"
+	messaging "github.com/eclipse-xfsc/nats-message-library"
 	"github.com/eclipse-xfsc/nats-message-library/common"
 	"github.com/eclipse-xfsc/oid4-vci-credential-retrieval-service/internal/config"
 	"github.com/eclipse-xfsc/oid4-vci-vp-library/model/credential"
-	"github.com/eclipse-xfsc/oid4-vci-vp-library/model/types"
-	"github.com/eclipse-xfsc/ssi-jwt"
+	jwt "github.com/eclipse-xfsc/ssi-jwt"
+	"github.com/google/uuid"
 	"github.com/lestrrat-go/jwx/v2/jwa"
 	"github.com/lestrrat-go/jwx/v2/jwe"
 	"github.com/lestrrat-go/jwx/v2/jwk"
@@ -22,54 +23,19 @@ import (
 var log logPkg.Logger
 
 func EncryptResponse(response credential.CredentialResponse, pub jwk.Key) *jwe.Message {
-	byteArray, err := json.Marshal(response.Credential)
+	byteArray, err := json.Marshal(response.Credentials)
 	if err != nil {
-		log.Error(err, "Failed to serialized Response")
+		log.Error(err, "Failed to serialize Response")
 	}
-	message := jwt.EncryptJweMessage(byteArray, jwa.ECDH_ES_A256KW, pub)
-	return message
+	return jwt.EncryptJweMessage(byteArray, jwa.ECDH_ES_A256KW, pub)
 }
 
+// StoreCredential stores the OID4VCI 1.0 credentials array. Each credential is
+// emitted as an individual storage message so batch issuance does not lose items.
 func StoreCredential(tenantId, requestId, groupId string, response credential.CredentialResponse, pub jwk.Key, ctx context.Context) error {
 	log = ctxPkg.GetLogger(ctx)
-	var cred = response.Credential
-	var contentType = ""
-	if pub != nil {
-		cred = EncryptResponse(response, pub)
-		contentType = "application/jose"
-	}
-
-	var byteCredential = make([]byte, 0)
-	if response.Format == string(types.JWTVC) || response.Format == string(types.SDJWT) {
-		byteCredential = []byte(cred.(string))
-	} else {
-		c, err := json.Marshal(cred)
-
-		if err != nil {
-			log.Error(err, "error in marshalling message")
-			return err
-		}
-
-		byteCredential = c
-	}
-
-	storemessage := messaging.StorageServiceStoreMessage{
-		Request: common.Request{
-			TenantId:  tenantId,
-			RequestId: requestId,
-			GroupId:   groupId,
-		},
-		Id:          response.CNonce,
-		AccountId:   groupId,
-		Type:        "credential",
-		Payload:     byteCredential,
-		ContentType: contentType,
-	}
-
-	b, err := json.Marshal(storemessage)
-
-	if err != nil {
-		log.Error(err, "error in marshalling message")
+	if len(response.Credentials) == 0 {
+		return errors.New("credential response contains no immediately issued credentials")
 	}
 
 	client, err := cloudeventprovider.New(cloudeventprovider.Config{
@@ -80,18 +46,42 @@ func StoreCredential(tenantId, requestId, groupId string, response credential.Cr
 			TimeoutInSec: config.CurrentCredentialRetrievalConfig.Nats.TimeoutInSec,
 		},
 	}, cloudeventprovider.ConnectionTypePub, config.CurrentCredentialRetrievalConfig.StoringTopic)
-
 	if err != nil {
-		log.Error(err, err.Error())
+		return err
 	}
 
-	event, err := cloudeventprovider.NewEvent("retrieval-service", messaging.StoreCredentialType, b)
-	if err != nil {
-		log.Error(err, err.Error())
-	}
+	for _, item := range response.Credentials {
+		payload := []byte(item.Credential)
+		contentType := "application/json"
+		var compact string
+		if json.Unmarshal(item.Credential, &compact) == nil && compact != "" {
+			payload = []byte(compact)
+			contentType = "application/vc+jwt"
+		}
+		if pub != nil {
+			message := jwt.EncryptJweMessage(payload, jwa.ECDH_ES_A256KW, pub)
+			payload, err = json.Marshal(message)
+			if err != nil {
+				return err
+			}
+			contentType = "application/jose"
+		}
 
-	if err = client.PubCtx(ctx, event); err != nil {
-		log.Error(err, fmt.Sprintf("sending event failed: %s", err))
+		storemessage := messaging.StorageServiceStoreMessage{
+			Request: common.Request{TenantId: tenantId, RequestId: requestId, GroupId: groupId},
+			Id:      uuid.NewString(), AccountId: groupId, Type: "credential", Payload: payload, ContentType: contentType,
+		}
+		b, err := json.Marshal(storemessage)
+		if err != nil {
+			return err
+		}
+		event, err := cloudeventprovider.NewEvent("retrieval-service", messaging.StoreCredentialType, b)
+		if err != nil {
+			return err
+		}
+		if err = client.PubCtx(ctx, event); err != nil {
+			return fmt.Errorf("sending storage event failed: %w", err)
+		}
 	}
-	return err
+	return nil
 }

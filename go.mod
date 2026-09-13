@@ -7,7 +7,7 @@ require (
 	github.com/eclipse-xfsc/cloud-event-provider v0.1.5
 	github.com/eclipse-xfsc/microservice-core-go v1.1.1
 	github.com/eclipse-xfsc/nats-message-library v1.3.1
-	github.com/eclipse-xfsc/oid4-vci-vp-library v1.6.6
+	github.com/eclipse-xfsc/oid4-vci-vp-library v1.8.1
 	github.com/eclipse-xfsc/ssi-jwt v1.2.1
 	github.com/gin-gonic/gin v1.11.0
 	github.com/gocql/gocql v1.7.0
@@ -23,6 +23,7 @@ require (
 	github.com/Azure/go-amqp v0.17.0 // indirect
 	github.com/IBM/sarama v1.46.3 // indirect
 	github.com/KyleBanks/depth v1.2.1 // indirect
+	github.com/MichaelFraser99/go-jose v0.9.0 // indirect
 	github.com/MichaelFraser99/go-sd-jwt v1.4.0 // indirect
 	github.com/bytedance/gopkg v0.1.3 // indirect
 	github.com/bytedance/sonic v1.14.2 // indirect
@@ -66,6 +67,7 @@ require (
 	github.com/goccy/go-json v0.10.5 // indirect
 	github.com/goccy/go-yaml v1.18.0 // indirect
 	github.com/golang/snappy v1.0.0 // indirect
+	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/hailocab/go-hostpool v0.0.0-20160125115350-e80d13ce29ed // indirect
 	github.com/hashicorp/go-uuid v1.0.3 // indirect
 	github.com/jcmturner/aescts/v2 v2.0.0 // indirect

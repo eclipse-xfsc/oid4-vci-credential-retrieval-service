@@ -47,7 +47,7 @@ func StoreOffering(tenantId string, offering types.OfferingRow) error {
 	}
 
 	return session.Query(queryString,
-		strings.Join(offering.Offering.Credentials, ","),
+		strings.Join(offering.Offering.CredentialConfigurationIDs, ","),
 		base64.RawStdEncoding.EncodeToString(bMeta),
 		base64.RawStdEncoding.EncodeToString(bOffer),
 		partition,
@@ -85,8 +85,14 @@ func ClearOffering(tenantId string, requestId string, groupId string, acceptance
 		return nil, errors.New("no record found")
 	}
 
-	response, err := fetchCredentialData(tenantId, offs[0], acceptance)
+	if !acceptance.Accept {
+		if err := deleteRejectedOffering(tenantId, requestId, groupId, ctx); err != nil {
+			return nil, errors.Join(errors.New("failed to delete rejected offering"), err)
+		}
+		return nil, nil
+	}
 
+	response, err := fetchCredentialData(ctx, tenantId, offs[0], acceptance)
 	if err != nil {
 		return nil, err
 	}
@@ -99,11 +105,6 @@ func ClearOffering(tenantId string, requestId string, groupId string, acceptance
 		err = updateOfferingStatus(tenantId, requestId, groupId, acceptance.Accept, ctx)
 		if err != nil {
 			return nil, errors.Join(errors.New("failed to update offering status"), err)
-		}
-	} else {
-		err = deleteRejectedOffering(tenantId, requestId, groupId, ctx)
-		if err != nil {
-			return nil, errors.Join(errors.New("failed to delete rejected offering"), err)
 		}
 	}
 

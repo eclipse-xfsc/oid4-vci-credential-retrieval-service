@@ -33,6 +33,12 @@ func ProcessOffering(tenantId string, requestId string, groupId string, offering
 
 	log.Debug(fmt.Sprintf("credentialOfferObject retieved: %v", newCredentialOfferObject))
 
+	// Validate the issuer URI before metadata discovery. The offer is untrusted input,
+	// so network access must not happen before URI/SSRF checks have passed.
+	if err := ValidateCredentialIssuerURI(newCredentialOfferObject); err != nil {
+		return errors.Join(errors.New("wallet validation rejected credential issuer URI"), err)
+	}
+
 	if config.CurrentCredentialRetrievalConfig.OfferingPolicy != "" {
 		b, err := opa.GetPolicyResult(config.CurrentCredentialRetrievalConfig.OfferingPolicy, tenantId, *newCredentialOfferObject)
 
@@ -52,8 +58,12 @@ func ProcessOffering(tenantId string, requestId string, groupId string, offering
 		return err
 	}
 
+	if err := ValidateOffering(newCredentialOfferObject, meta); err != nil {
+		return errors.Join(errors.New("wallet validation rejected credential offer"), err)
+	}
+
 	if config.CurrentCredentialRetrievalConfig.MetadataPolicy != "" {
-		b, err := opa.GetPolicyResult(config.CurrentCredentialRetrievalConfig.OfferingPolicy, tenantId, *meta)
+		b, err := opa.GetPolicyResult(config.CurrentCredentialRetrievalConfig.MetadataPolicy, tenantId, *meta)
 
 		if err != nil {
 			log.Error(err, "error while getting result from opa policy")
@@ -147,7 +157,9 @@ func CreateHolderBinding(tenantId, nonce, audience string, accept types.Acceptan
 	}
 
 	var p = make(map[string]interface{})
-	p["nonce"] = nonce
+	if nonce != "" {
+		p["nonce"] = nonce
+	}
 	p["aud"] = audience
 	p["iat"] = time.Now().UTC().Unix()
 
@@ -212,7 +224,7 @@ func CreateHolderBinding(tenantId, nonce, audience string, accept types.Acceptan
 			}
 		}
 		return "", errors.Join(errors.New("error response from signer"),
-			fmt.Errorf("status: %s id: %s msg: %s", data.Error.Status, data.Error.Id, data.Error.Msg),
+			fmt.Errorf("status: %v id: %s msg: %s", data.Error.Status, data.Error.Id, data.Error.Msg),
 		)
 	} else {
 		return "", fmt.Errorf("invalid response type received from signer. response type: %s", rep.Type())
@@ -238,98 +250,82 @@ func notifyRetrieval(notify retrieval.RetrievalNotification) error {
 	return err
 }
 
-func fetchCredentialData(tenantId string, row types.OfferingRow, acceptance types.Acceptance) (*credential.CredentialResponse, error) {
+func fetchCredentialData(ctx context.Context, tenantId string, row types.OfferingRow, acceptance types.Acceptance) (*credential.CredentialResponse, error) {
 	logger := cmn.GetEnvironment().GetLogger()
 	metadata, err := getIssuerMetadata(&row.Offering, logger)
-
 	if err != nil {
-		log.Error(err, "error during get issuermetadata")
 		return nil, errors.Join(errors.New("error during get issuermetadata"), err)
 	}
-
-	if row.Offering.Grants.AuthorizationCode != nil || row.Offering.Grants.PreAuthorizedCode == nil {
-		return nil, errors.Join(errors.New("unsupported grant type"), err)
+	if len(row.Offering.CredentialConfigurationIDs) == 0 {
+		return nil, errors.New("offering has no credential_configuration_ids")
+	}
+	if row.Offering.Grants == nil || row.Offering.Grants.AuthorizationCode != nil || row.Offering.Grants.PreAuthorizedCode == nil {
+		return nil, errors.New("unsupported grant type")
 	}
 
-	//Here should be a better check, but ok for now
-	config, err := metadata.FindFittingAuthorizationServer(oauth.PreAuthorizedCodeGrant)
-
+	configAS, err := metadata.FindFittingAuthorizationServer(oauth.PreAuthorizedCodeGrant)
 	if err != nil {
-		log.Error(err, "error during finding authorization server")
-		return nil, errors.Join(errors.New("error during get error during finding authorization server"), err)
+		return nil, errors.Join(errors.New("error during finding authorization server"), err)
 	}
-
-	options := make(map[string]interface{}, 0)
-	options["code"] = row.Offering.Grants.PreAuthorizedCode.PreAuthorizationCode
-	options["interval"] = row.Offering.Grants.PreAuthorizedCode.Interval
-	if acceptance.TxCode != "" {
-		options["tx_code"] = acceptance.TxCode
+	tokenOptions := oauth.TokenRequestOptions{
+		PreAuthorizedCode: row.Offering.Grants.PreAuthorizedCode.PreAuthorizedCode,
+		TxCode:            acceptance.TxCode,
 	}
-
-	tok, err := config.GetToken(oauth.PreAuthorizedCodeGrant, options)
-
+	tok, err := configAS.GetToken(oauth.PreAuthorizedCodeGrant, tokenOptions)
 	if err != nil {
-		log.Error(err, "error during token get")
 		return nil, errors.Join(errors.New("error during token get"), err)
 	}
 
-	binding, err := CreateHolderBinding(tenantId, tok.CNonce, config.Issuer, acceptance)
+	credentialIssuer := metadata.CredentialIssuer
+	if credentialIssuer == "" {
+		return nil, errors.New("issuer metadata contains no credential_issuer")
+	}
 
+	// OID4VCI 1.0 moved c_nonce out of the Token Response. If the issuer
+	// advertises a nonce_endpoint, obtain a fresh nonce there before creating
+	// the key proof. Without a nonce endpoint the nonce claim is omitted.
+	nonce, err := fetchCredentialNonce(ctx, metadata, credentialIssuer)
 	if err != nil {
-		log.Error(err, "error during holder binding")
+		return nil, errors.Join(errors.New("error during nonce retrieval"), err)
+	}
+	binding, err := CreateHolderBinding(tenantId, nonce, credentialIssuer, acceptance)
+	if err != nil {
 		return nil, errors.Join(errors.New("error during holder binding"), err)
+	}
+	if err := ValidateHolderBinding(binding, nonce, credentialIssuer); err != nil {
+		return nil, errors.Join(errors.New("signer returned invalid holder proof"), err)
 	}
 
 	req := credential.CredentialRequest{
-		Proof: &credential.Proof{
-			ProofType: credential.ProofTypeJWT,
-			Jwt:       &binding,
-		},
+		Proofs: &credential.CredentialProofs{JWT: []string{binding}},
 	}
 
-	if tok.AuthorizationDetails != nil {
-		if tok.AuthorizationDetails.CredentialIdentifiers != nil && len(tok.AuthorizationDetails.CredentialIdentifiers) > 0 {
-			req.CredentialIdentifier = tok.AuthorizationDetails.CredentialIdentifiers[0]
+	// OID4VCI 1.0: credential_identifier from authorization_details takes
+	// precedence. Otherwise select by credential_configuration_id from offer.
+	for _, detail := range tok.AuthorizationDetails {
+		if len(detail.CredentialIdentifiers) > 0 {
+			req.CredentialIdentifier = detail.CredentialIdentifiers[0]
+			break
 		}
-		req.CredentialConfigurationId = tok.AuthorizationDetails.CredentialConfigurationID
-
-	} else {
-		credConfig := row.MetaData.CredentialConfigurationsSupported[row.Offering.Credentials[0]]
-		req.Format = credConfig.Format
-		if credConfig.Vct != nil {
-			req.Vct = credConfig.Vct
+		if req.CredentialConfigurationID == "" && detail.CredentialConfigurationID != "" {
+			req.CredentialConfigurationID = detail.CredentialConfigurationID
 		}
-
-		if credConfig.Claims != nil {
-			claims := make([]oauth.Claim, 0)
-			for _, c := range credConfig.Claims {
-				claims = append(claims, c.Claim)
-			}
-			req.Claims = claims
-		}
-
-		if credConfig.Order != nil {
-			req.Order = credConfig.Order
+	}
+	if req.CredentialIdentifier == "" && req.CredentialConfigurationID == "" {
+		req.CredentialConfigurationID = row.Offering.CredentialConfigurationIDs[0]
+	}
+	if req.CredentialIdentifier == "" {
+		if _, ok := metadata.CredentialConfigurationsSupported[req.CredentialConfigurationID]; !ok {
+			return nil, fmt.Errorf("credential configuration %q is not supported by issuer metadata", req.CredentialConfigurationID)
 		}
 	}
 
 	cred, err := metadata.CredentialRequest(req, *tok)
 	if err != nil {
-		log.Error(err, "error during getting credential")
 		return nil, errors.Join(errors.New("error during getting credential"), err)
 	}
-	if len(row.Offering.Credentials) == 0 {
-		err := errors.New("offering has no credentials – missing or misconfigured")
-		log.Error(err, "no credentials in offering")
-		return nil, err
+	if err := ValidateCredentialResponse(ctx, cred, credentialIssuer); err != nil {
+		return nil, errors.Join(errors.New("wallet validation rejected issued credential"), err)
 	}
-	credKey := row.Offering.Credentials[0]
-	credConfig, ok := metadata.CredentialConfigurationsSupported[credKey]
-	if !ok {
-		err := fmt.Errorf("credential configuration for key '%s' not found – unsupported or misconfigured", credKey)
-		log.Error(err, "unsupported credential configuration")
-		return nil, err
-	}
-	cred.Format = credConfig.Format
 	return cred, nil
 }
