@@ -47,7 +47,7 @@ func StoreOffering(tenantId string, offering types.OfferingRow) error {
 	}
 
 	return session.Query(queryString,
-		strings.Join(offering.Offering.Credentials, ","),
+		strings.Join(offering.Offering.CredentialConfigurationIDs, ","),
 		base64.RawStdEncoding.EncodeToString(bMeta),
 		base64.RawStdEncoding.EncodeToString(bOffer),
 		partition,
@@ -64,6 +64,11 @@ func GetOfferings(tenantId string, groupId string) ([]types.OfferingRow, error) 
 																					tenantId=%s;`, tenantId)
 	return getOfferings(tenantId, groupId, queryString)
 }
+
+// Injectable seams keep the clearance workflow testable without an issuer, signer NATS,
+// or storage NATS connection. Production defaults point at the real implementations.
+var fetchCredentialDataForAcceptance = fetchCredentialData
+var storeAcceptedCredential = StoreCredential
 
 func ClearOffering(tenantId string, requestId string, groupId string, acceptance types.Acceptance, ctx context.Context) (*credential.CredentialResponse, error) {
 
@@ -85,25 +90,26 @@ func ClearOffering(tenantId string, requestId string, groupId string, acceptance
 		return nil, errors.New("no record found")
 	}
 
-	response, err := fetchCredentialData(tenantId, offs[0], acceptance)
+	if !acceptance.Accept {
+		if err := deleteRejectedOffering(tenantId, requestId, groupId, ctx); err != nil {
+			return nil, errors.Join(errors.New("failed to delete rejected offering"), err)
+		}
+		return nil, nil
+	}
 
+	response, err := fetchCredentialDataForAcceptance(ctx, tenantId, offs[0], acceptance)
 	if err != nil {
 		return nil, err
 	}
 
 	if acceptance.Accept {
-		err = StoreCredential(tenantId, requestId, groupId, *response, nil, ctx)
+		err = storeAcceptedCredential(tenantId, requestId, groupId, *response, nil, ctx)
 		if err != nil {
 			return nil, errors.Join(errors.New("failed to store accepted credential"), err)
 		}
 		err = updateOfferingStatus(tenantId, requestId, groupId, acceptance.Accept, ctx)
 		if err != nil {
 			return nil, errors.Join(errors.New("failed to update offering status"), err)
-		}
-	} else {
-		err = deleteRejectedOffering(tenantId, requestId, groupId, ctx)
-		if err != nil {
-			return nil, errors.Join(errors.New("failed to delete rejected offering"), err)
 		}
 	}
 
@@ -175,7 +181,7 @@ func getOfferings(tenantId string, groupId string, queryString string) ([]types.
 		partition,
 		region,
 		country,
-		groupId).Consistency(gocql.LocalQuorum).Raw().Iter()
+		groupId).Consistency(gocql.LocalQuorum).Iter()
 
 	ret := make([]types.OfferingRow, 0)
 

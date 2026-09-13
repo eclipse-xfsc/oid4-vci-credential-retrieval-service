@@ -84,3 +84,56 @@ The Cassandra Database must contain in the tenant space an [table](./scripts/cql
 cqlsh <cassandra host> <cassandra port> -u <cassandra user> -p <cassandra password> -e "SELECT * FROM tenant_space.offerings;"
 
 ```
+
+## Wallet-side security validation
+
+Before an accepted credential is persisted, the retrieval service now performs wallet-side validation instead of treating a successful Credential Endpoint response as trusted.
+
+The checks include:
+
+- Credential Offer and issuer metadata consistency (`credential_issuer`, offered configuration IDs, HTTPS URI requirements).
+- Holder proof structure (`typ=openid4vci-proof+jwt`, asymmetric `alg`, exactly one of `jwk`/`kid`/`x5c`, nonce, audience, and `iat`). The proof audience is the Credential Issuer Identifier, not the Authorization Server issuer.
+- JWT VC and SD-JWT VC issuer-signed JWT verification using `did:web` `publicKeyJwk` keys or an HTTPS issuer's `jwks_uri`.
+- Credential validity (`exp`, `nbf`, `validFrom`, `validUntil`) and issuer-to-Credential-Issuer binding.
+- W3C `StatusList2021Entry` / `BitstringStatusListEntry` and OAuth/JWT status-list references when present. Status-list JWT signatures, `sub`, expiration, purpose, index and the referenced bit/status value are checked.
+- URI hardening for remotely dereferenced status/JWKS/DID documents: HTTPS by default, private/link-local/loopback address rejection, redirect re-validation, response size limits and HTTP timeouts.
+
+A status list hosted on a different origin than the credential issuer must be explicitly allowed:
+
+```text
+CREDENTIALRETRIEVAL_STATUSLIST_ALLOWED_ORIGINS=https://status.example.com,https://status2.example.com
+```
+
+`CREDENTIALRETRIEVAL_DISABLETLS=true` remains a development escape hatch and also permits local/private HTTP resources. It should never be enabled in production.
+
+JSON-LD/Data-Integrity status-list credentials are deliberately rejected for now because this service does not contain a Data Integrity proof verifier. A signed `application/statuslist+jwt` representation is required. Likewise, an `x5c` header is not used as an implicit trust anchor; production x5c support requires an explicitly configured trust-anchor bundle and certificate identity checks.
+
+### Wallet security checks
+
+Before an accepted credential is persisted, the retrieval service performs wallet-side validation of the issuance result. The checks include:
+
+- validation of `credential_issuer` before issuer-metadata network access;
+- exact binding between the offer and the issuer metadata;
+- JWT key-proof shape checks (`typ`, asymmetric `alg`, key reference, `aud`, `nonce`, `iat`);
+- signature and validity checks for issued compact JWT/SD-JWT credentials;
+- issuer-controlled key resolution (`did:web` or issuer metadata/JWKS); an embedded credential `jwk` is not accepted as its own trust anchor and `x5c` requires a configured trust store;
+- W3C `StatusList2021Entry` / `BitstringStatusListEntry` and token status-list evaluation;
+- HTTPS-by-default URI validation, SSRF/private-address blocking, redirect limits, response-size limits and status-list origin binding.
+
+`CREDENTIALRETRIEVAL_STATUSLIST_ALLOWED_ORIGINS` can contain additional comma-separated trusted status-list origins when the status service intentionally runs on a different origin than the credential issuer. `CREDENTIALRETRIEVAL_DISABLETLS=true` is a development-only escape hatch and must not be enabled in production.
+
+The current `oid4-vci-vp-library` dependency still models the older singular `proof` Credential Request. OpenID4VCI 1.0 Final uses the `proofs` parameter and a dedicated Nonce Endpoint when the issuer advertises one. Migrating that wire model should be done in the library so the retrieval service can consume the final API without maintaining a second protocol model locally.
+
+## OID4VCI 1.0 wallet flow
+
+The retrieval service is aligned with the OID4VCI 1.0 data model from `oid4-vci-vp-library` commit `d7d32fe` (`oidvci10`). In particular, the wallet flow now uses:
+
+- `credential_configuration_ids` from the Credential Offer.
+- `credential_identifier` or `credential_configuration_id` for Credential Requests.
+- the OID4VCI 1.0 `proofs` object (`proofs.jwt`) instead of the legacy singular `proof` field.
+- `nonce_endpoint` when advertised by Issuer Metadata. `c_nonce` is no longer expected in the Token Response.
+- the OID4VCI 1.0 `credentials` response array, including batch-safe storage of every returned credential.
+
+Before storage, immediately issued JWT VC / SD-JWT VC credentials are checked fail-closed. The checks include proof shape and audience/nonce binding, issuer/signature trust, validity times, issuer binding, supported credential configuration, status-list resolution and revocation/suspension state. Remote issuer/status/nonce URIs are restricted to safe HTTP(S) targets with HTTPS required by default, private/local address rejection, redirect limits, response size limits, and protected DNS dialing for wallet-managed fetches.
+
+Deferred issuance (`transaction_id`) is currently rejected by the retrieval flow rather than silently storing an incomplete response. It should be implemented as a separate polling workflow against `deferred_credential_endpoint`.

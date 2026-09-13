@@ -80,9 +80,14 @@ func TestAcceptCredentials(t *testing.T) {
 
 	mockOffer := credential.CredentialOfferParameters{}
 	mockOffer.CredentialIssuer = "hydra"
-	mockOffer.Credentials = []string{"VerifiableCredential", "UniversityDegreeCredential"}
+	mockOffer.CredentialConfigurationIDs = []string{"VerifiableCredential", "UniversityDegreeCredential"}
+	mockOffer.Grants = &credential.Grants{
+		AuthorizationCode: &credential.AuthorizationCode{},
+		PreAuthorizedCode: &credential.PreAuthorizedCode{},
+	}
+
 	mockOffer.Grants.AuthorizationCode.IssuerState = "eyJhbGciOiJSU0EtFYUaBy"
-	mockOffer.Grants.PreAuthorizedCode.PreAuthorizationCode = "AOIPO235"
+	mockOffer.Grants.PreAuthorizedCode.PreAuthorizedCode = "AOIPO235"
 
 	acceptCredentials, _ := GetPolicyResult(config.CurrentCredentialRetrievalConfig.OfferingPolicy, "foo", mockOffer)
 	require.Equal(t, acceptCredentials, true)

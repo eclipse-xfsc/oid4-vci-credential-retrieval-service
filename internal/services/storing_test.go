@@ -1,9 +1,15 @@
 package services
 
 import (
+	"context"
+	"encoding/json"
+	"errors"
 	"testing"
 
+	mockpkg "github.com/eclipse-xfsc/oid4-vci-credential-retrieval-service/internal/mocks"
+	"github.com/eclipse-xfsc/oid4-vci-vp-library/model/credential"
 	"github.com/lestrrat-go/jwx/v2/jwk"
+	"github.com/stretchr/testify/require"
 )
 
 const testKey = `{
@@ -49,4 +55,42 @@ func TestEncryption(t *testing.T) {
 	}
 
 	require.Equal(t, serialize, decrypt)*/
+}
+
+func TestStoreCredentialPublishesEveryAcceptedCredential(t *testing.T) {
+	var response credential.CredentialResponse
+	require.NoError(t, json.Unmarshal([]byte(`{"credentials":[{"credential":"jwt-one"},{"credential":"jwt-two"}]}`), &response))
+
+	publisher := &mockpkg.StoragePublisher{}
+	oldFactory := newStorageMessagePublisher
+	newStorageMessagePublisher = func() (storageMessagePublisher, error) { return publisher, nil }
+	t.Cleanup(func() { newStorageMessagePublisher = oldFactory })
+
+	err := StoreCredential("tenant-a", "request-a", "group-a", response, nil, context.Background())
+	require.NoError(t, err)
+	require.Len(t, publisher.Messages, 2)
+
+	for index, message := range publisher.Messages {
+		require.Equal(t, "tenant-a", message.Request.TenantId)
+		require.Equal(t, "request-a", message.Request.RequestId)
+		require.Equal(t, "group-a", message.Request.GroupId)
+		require.Equal(t, "group-a", message.AccountId)
+		require.Equal(t, "credential", message.Type)
+		require.Equal(t, "application/vc+jwt", message.ContentType)
+		require.Equal(t, []byte([]string{"jwt-one", "jwt-two"}[index]), message.Payload)
+		require.NotEmpty(t, message.Id)
+	}
+}
+
+func TestStoreCredentialPropagatesPublisherFailure(t *testing.T) {
+	var response credential.CredentialResponse
+	require.NoError(t, json.Unmarshal([]byte(`{"credentials":[{"credential":"jwt-one"}]}`), &response))
+
+	publisher := &mockpkg.StoragePublisher{Err: errors.New("broker unavailable")}
+	oldFactory := newStorageMessagePublisher
+	newStorageMessagePublisher = func() (storageMessagePublisher, error) { return publisher, nil }
+	t.Cleanup(func() { newStorageMessagePublisher = oldFactory })
+
+	err := StoreCredential("tenant-a", "request-a", "group-a", response, nil, context.Background())
+	require.ErrorContains(t, err, "broker unavailable")
 }

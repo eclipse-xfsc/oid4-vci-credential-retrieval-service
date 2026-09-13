@@ -17,9 +17,14 @@ type SessionInterface interface {
 type QueryInterface interface {
 	Scan(...interface{}) error
 	Exec() error
-	Raw() *gocql.Query
+	Iter() IterInterface
 	WithContext(ctx context.Context) QueryInterface
 	Consistency(consistency gocql.Consistency) QueryInterface
+}
+
+type IterInterface interface {
+	Scan(...interface{}) bool
+	Close() error
 }
 
 type Session struct {
@@ -50,8 +55,8 @@ func (q *Query) Exec() error {
 	return q.query.Exec()
 }
 
-func (q *Query) Raw() *gocql.Query {
-	return q.query
+func (q *Query) Iter() IterInterface {
+	return q.query.Iter()
 }
 
 // Scan wraps the query's Scan method

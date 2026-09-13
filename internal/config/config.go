@@ -9,14 +9,15 @@ import (
 
 type CredentialRetrievalConfig struct {
 	configPkg.BaseConfig
-	Country        string `mapstructure:"country" envconfig:"COUNTRY"`
-	Region         string `mapstructure:"region" envconfig:"REGION"`
-	OfferingTopic  string `envconfig:"OFFERING_TOPIC"`
-	StoringTopic   string `envconfig:"STORAGE_TOPIC"`
-	SignerTopic    string `envconfig:"SIGNER_TOPIC"`
-	OfferingPolicy string `envconfig:"OFFERINGPOLICY"`
-	MetadataPolicy string `envconfig:"METADATAPOLICY"`
-	DisableTLS     bool   `envconfig:"DISABLETLS"`
+	Country                  string   `mapstructure:"country" envconfig:"COUNTRY"`
+	Region                   string   `mapstructure:"region" envconfig:"REGION"`
+	OfferingTopic            string   `envconfig:"OFFERING_TOPIC"`
+	StoringTopic             string   `envconfig:"STORAGE_TOPIC"`
+	SignerTopic              string   `envconfig:"SIGNER_TOPIC"`
+	OfferingPolicy           string   `envconfig:"OFFERINGPOLICY"`
+	MetadataPolicy           string   `envconfig:"METADATAPOLICY"`
+	DisableTLS               bool     `envconfig:"DISABLETLS"`
+	StatusListAllowedOrigins []string `envconfig:"STATUSLIST_ALLOWED_ORIGINS"`
 
 	Nats      cloudeventprovider.NatsConfig `envconfig:"NATS"`
 	Cassandra struct {
