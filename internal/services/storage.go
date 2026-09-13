@@ -65,6 +65,11 @@ func GetOfferings(tenantId string, groupId string) ([]types.OfferingRow, error) 
 	return getOfferings(tenantId, groupId, queryString)
 }
 
+// Injectable seams keep the clearance workflow testable without an issuer, signer NATS,
+// or storage NATS connection. Production defaults point at the real implementations.
+var fetchCredentialDataForAcceptance = fetchCredentialData
+var storeAcceptedCredential = StoreCredential
+
 func ClearOffering(tenantId string, requestId string, groupId string, acceptance types.Acceptance, ctx context.Context) (*credential.CredentialResponse, error) {
 
 	queryString := fmt.Sprintf(`SELECT requestId,metadata,offerParams,status,last_update_timestamp FROM ocm.offerings WHERE partition=? AND 
@@ -92,13 +97,13 @@ func ClearOffering(tenantId string, requestId string, groupId string, acceptance
 		return nil, nil
 	}
 
-	response, err := fetchCredentialData(ctx, tenantId, offs[0], acceptance)
+	response, err := fetchCredentialDataForAcceptance(ctx, tenantId, offs[0], acceptance)
 	if err != nil {
 		return nil, err
 	}
 
 	if acceptance.Accept {
-		err = StoreCredential(tenantId, requestId, groupId, *response, nil, ctx)
+		err = storeAcceptedCredential(tenantId, requestId, groupId, *response, nil, ctx)
 		if err != nil {
 			return nil, errors.Join(errors.New("failed to store accepted credential"), err)
 		}
@@ -176,7 +181,7 @@ func getOfferings(tenantId string, groupId string, queryString string) ([]types.
 		partition,
 		region,
 		country,
-		groupId).Consistency(gocql.LocalQuorum).Raw().Iter()
+		groupId).Consistency(gocql.LocalQuorum).Iter()
 
 	ret := make([]types.OfferingRow, 0)
 
