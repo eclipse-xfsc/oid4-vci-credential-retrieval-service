@@ -546,31 +546,214 @@ func sameOriginOrConfigured(rawURL, credentialIssuer string) bool {
 	return false
 }
 
-func verifyJWTSignature(ctx context.Context, compact string, header, claims map[string]any, signingInput, signature []byte, issuer string) error {
+func verifyJWTSignature(
+	ctx context.Context,
+	compact string,
+	header, claims map[string]any,
+	signingInput, signature []byte,
+	issuer string,
+) error {
 	alg, _ := header["alg"].(string)
 	if alg == "" || alg == "none" || strings.HasPrefix(alg, "HS") {
 		return fmt.Errorf("unsupported/unsafe JWT alg %q", alg)
 	}
-	keys, err := resolveVerificationKeys(ctx, issuer, header)
+
+	kid, _ := header["kid"].(string)
+	kid = strings.TrimSpace(kid)
+
+	var (
+		keys             []verificationKey
+		err              error
+		kidResolutionErr error
+	)
+
+	//
+	// 1. Prefer direct resolution via kid.
+	//
+	if kid != "" {
+		keys, kidResolutionErr = resolveVerificationKeysFromKID(ctx, kid)
+
+		if kidResolutionErr == nil && len(keys) > 0 {
+			if err := verifyWithKeys(
+				alg,
+				kid,
+				keys,
+				signingInput,
+				signature,
+			); err == nil {
+				return nil
+			} else {
+				// The kid was successfully resolved.
+				//
+				// Do NOT silently verify with a different issuer key if
+				// the explicitly referenced key exists but the signature
+				// is invalid.
+				return fmt.Errorf(
+					"signature verification with kid %q failed: %w",
+					kid,
+					err,
+				)
+			}
+		}
+	}
+
+	//
+	// 2. Direct kid resolution was unavailable/failed.
+	//    Fall back to issuer based discovery.
+	//
+	keys, err = resolveVerificationKeysFromIssuer(ctx, issuer, header)
 	if err != nil {
+		if kidResolutionErr != nil {
+			return fmt.Errorf(
+				"failed to resolve verification key via kid %q (%v) and issuer %q: %w",
+				kid,
+				kidResolutionErr,
+				issuer,
+				err,
+			)
+		}
+
+		return fmt.Errorf(
+			"failed to resolve verification keys for issuer %q: %w",
+			issuer,
+			err,
+		)
+	}
+
+	if err := verifyWithKeys(
+		alg,
+		kid,
+		keys,
+		signingInput,
+		signature,
+	); err != nil {
+		if kidResolutionErr != nil {
+			return fmt.Errorf(
+				"signature verification failed after kid resolution %q failed (%v): %w",
+				kid,
+				kidResolutionErr,
+				err,
+			)
+		}
+
 		return err
 	}
-	kid, _ := header["kid"].(string)
-	var last error
+
+	return nil
+}
+
+func verifyWithKeys(
+	alg string,
+	kid string,
+	keys []verificationKey,
+	signingInput []byte,
+	signature []byte,
+) error {
+	var (
+		lastErr error
+		matched bool
+	)
+
 	for _, raw := range keys {
-		if kid != "" && raw.Kid != "" && raw.Kid != kid {
+		//
+		// If the JWT specifies a kid, only that exact key may be used.
+		//
+		if kid != "" {
+			if raw.Kid != kid {
+				continue
+			}
+
+			matched = true
+		} else {
+			matched = true
+		}
+
+		if err := verifySignature(
+			alg,
+			raw.Key,
+			signingInput,
+			signature,
+		); err != nil {
+			lastErr = err
 			continue
 		}
-		if err := verifySignature(alg, raw.Key, signingInput, signature); err == nil {
-			return nil
-		} else {
-			last = err
+
+		return nil
+	}
+
+	if kid != "" && !matched {
+		return fmt.Errorf(
+			"no verification key matching kid %q",
+			kid,
+		)
+	}
+
+	if lastErr != nil {
+		return lastErr
+	}
+
+	return errors.New("no usable verification key")
+}
+
+func resolveVerificationKeysFromKID(
+	ctx context.Context,
+	kid string,
+) ([]verificationKey, error) {
+	kid = strings.TrimSpace(kid)
+
+	if kid == "" {
+		return nil, errors.New("kid is empty")
+	}
+
+	//
+	// DID URL
+	//
+	if strings.HasPrefix(kid, "did:web:") {
+		did := kid
+
+		if idx := strings.IndexByte(did, '#'); idx >= 0 {
+			did = did[:idx]
 		}
+
+		keys, err := resolveDIDWeb(ctx, did)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"resolve DID from kid %q: %w",
+				kid,
+				err,
+			)
+		}
+
+		//
+		// kid identifies a concrete verification method.
+		//
+		if strings.Contains(kid, "#") {
+			for _, key := range keys {
+				if key.Kid == kid {
+					return []verificationKey{key}, nil
+				}
+			}
+
+			return nil, fmt.Errorf(
+				"DID document %q contains no verification method %q",
+				did,
+				kid,
+			)
+		}
+
+		return keys, nil
 	}
-	if last == nil {
-		last = errors.New("no matching verification key")
-	}
-	return last
+
+	//
+	// Do NOT fetch arbitrary HTTP URLs from kid.
+	//
+	// kid is controlled by the JWT sender and blindly fetching an
+	// https://... kid would introduce an SSRF primitive.
+	//
+	return nil, fmt.Errorf(
+		"kid %q is not directly resolvable",
+		kid,
+	)
 }
 
 type verificationKey struct {
@@ -578,7 +761,7 @@ type verificationKey struct {
 	Key crypto.PublicKey
 }
 
-func resolveVerificationKeys(ctx context.Context, issuer string, header map[string]any) ([]verificationKey, error) {
+func resolveVerificationKeysFromIssuer(ctx context.Context, issuer string, header map[string]any) ([]verificationKey, error) {
 	// Never trust an embedded JWK from an issued credential as its own trust anchor.
 	// Verification keys must be resolved from an issuer-controlled trust source.
 	if mapValue(header["jwk"]) != nil {
