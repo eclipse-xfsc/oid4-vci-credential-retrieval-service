@@ -7,7 +7,7 @@ import (
 	"os"
 
 	"github.com/cloudevents/sdk-go/v2/event"
-	"github.com/eclipse-xfsc/cloud-event-provider"
+	cloudeventprovider "github.com/eclipse-xfsc/cloud-event-provider"
 	logPkg "github.com/eclipse-xfsc/microservice-core-go/pkg/logr"
 	retrieval "github.com/eclipse-xfsc/nats-message-library"
 	"github.com/eclipse-xfsc/oid4-vci-credential-retrieval-service/internal/common"
@@ -45,7 +45,7 @@ func handleMessage(event event.Event) {
 			Accept:          acceptance.Result,
 			HolderKey:       acceptance.HolderKey,
 			HolderNamespace: acceptance.HolderNamespace,
-			HolderGroup:     acceptance.GroupId,
+			HolderGroup:     acceptance.HolderGroup,
 			TxCode:          acceptance.TxCode,
 		}, context.Background())
 	}

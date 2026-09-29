@@ -308,6 +308,7 @@ func ClearOffering(
 	response, err := fetchCredentialDataForAcceptance(
 		ctx,
 		tenantId,
+		groupId,
 		offs[0],
 		acceptance,
 	)

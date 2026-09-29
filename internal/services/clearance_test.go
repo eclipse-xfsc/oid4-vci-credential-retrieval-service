@@ -75,7 +75,7 @@ func credentialResponseFromJSON(t *testing.T, raw string) credential.CredentialR
 func TestClearOfferingRejectDeletesOfferingWithoutFetchingCredential(t *testing.T) {
 	_, executed := setupClearanceDB(t, "request-1")
 	oldFetch := fetchCredentialDataForAcceptance
-	fetchCredentialDataForAcceptance = func(context.Context, string, types.OfferingRow, types.Acceptance) (*credential.CredentialResponse, error) {
+	fetchCredentialDataForAcceptance = func(context.Context, string, string, types.OfferingRow, types.Acceptance) (*credential.CredentialResponse, error) {
 		t.Fatal("credential must not be fetched when the holder rejects the offering")
 		return nil, nil
 	}
@@ -94,8 +94,9 @@ func TestClearOfferingAcceptStoresCredentialAndMarksOfferingAccepted(t *testing.
 
 	oldFetch := fetchCredentialDataForAcceptance
 	oldStore := storeAcceptedCredential
-	fetchCredentialDataForAcceptance = func(ctx context.Context, tenantID string, row types.OfferingRow, acceptance types.Acceptance) (*credential.CredentialResponse, error) {
+	fetchCredentialDataForAcceptance = func(ctx context.Context, tenantID, groupID string, row types.OfferingRow, acceptance types.Acceptance) (*credential.CredentialResponse, error) {
 		require.Equal(t, "tenant_a", tenantID)
+		require.Equal(t, "tenant_a", groupID)
 		require.Equal(t, "request-2", row.RequestId)
 		require.True(t, acceptance.Accept)
 		return &expected, nil
@@ -128,7 +129,7 @@ func TestClearOfferingAcceptDoesNotMarkAcceptedWhenStorageFails(t *testing.T) {
 	expected := credentialResponseFromJSON(t, `{"credentials":[{"credential":"header.payload.signature"}]}`)
 	oldFetch := fetchCredentialDataForAcceptance
 	oldStore := storeAcceptedCredential
-	fetchCredentialDataForAcceptance = func(context.Context, string, types.OfferingRow, types.Acceptance) (*credential.CredentialResponse, error) {
+	fetchCredentialDataForAcceptance = func(context.Context, string, string, types.OfferingRow, types.Acceptance) (*credential.CredentialResponse, error) {
 		return &expected, nil
 	}
 	storeAcceptedCredential = func(string, string, string, credential.CredentialResponse, jwk.Key, context.Context) error {

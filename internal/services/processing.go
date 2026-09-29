@@ -142,7 +142,7 @@ func CreatePublicationClient() error {
 	return nil
 }
 
-func CreateHolderBinding(tenantId, nonce, audience string, accept types.Acceptance) (string, error) {
+func CreateHolderBinding(tenantId, groupId, nonce, audience string, accept types.Acceptance) (string, error) {
 	client, err := cloudeventprovider.New(cloudeventprovider.Config{
 		Protocol: cloudeventprovider.ProtocolTypeNats,
 		Settings: cloudeventprovider.NatsConfig{
@@ -182,6 +182,7 @@ func CreateHolderBinding(tenantId, nonce, audience string, accept types.Acceptan
 	payload := retrieval.CreateTokenRequest{
 		Request: common.Request{
 			TenantId:  tenantId,
+			GroupId:   groupId,
 			RequestId: uuid.NewString(),
 		},
 		Namespace: accept.HolderNamespace,
@@ -250,7 +251,7 @@ func notifyRetrieval(notify retrieval.RetrievalNotification) error {
 	return err
 }
 
-func fetchCredentialData(ctx context.Context, tenantId string, row types.OfferingRow, acceptance types.Acceptance) (*credential.CredentialResponse, error) {
+func fetchCredentialData(ctx context.Context, tenantId, groupId string, row types.OfferingRow, acceptance types.Acceptance) (*credential.CredentialResponse, error) {
 	logger := cmn.GetEnvironment().GetLogger()
 	metadata, err := getIssuerMetadata(&row.Offering, logger)
 	if err != nil {
@@ -288,7 +289,7 @@ func fetchCredentialData(ctx context.Context, tenantId string, row types.Offerin
 	if err != nil {
 		return nil, errors.Join(errors.New("error during nonce retrieval"), err)
 	}
-	binding, err := CreateHolderBinding(tenantId, nonce, credentialIssuer, acceptance)
+	binding, err := CreateHolderBinding(tenantId, groupId, nonce, credentialIssuer, acceptance)
 	if err != nil {
 		return nil, errors.Join(errors.New("error during holder binding"), err)
 	}
