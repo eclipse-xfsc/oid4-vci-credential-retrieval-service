@@ -17,7 +17,7 @@ image:
 
 podAnnotations:
     inject.xfsc.io/enabled: "false"
-    inject.xfsc.io/needs: "nats,cassandra,storage,signer"
+    inject.xfsc.io/needs: "nats,cassandra,storageservice,signer"
     inject.xfsc.io/env-prefix: "CREDENTIALRETRIEVAL" 
 
 resourceProvider:
