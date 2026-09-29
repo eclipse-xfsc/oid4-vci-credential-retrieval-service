@@ -457,7 +457,7 @@ func fetchProtected(ctx context.Context, rawURL, credentialIssuer string) ([]byt
 	if err != nil {
 		return nil, "", err
 	}
-	req.Header.Set("Accept", "application/statuslist+jwt, application/jwt, application/json;q=0.8")
+	req.Header.Set("Accept", "application/statuslist+jwt")
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, "", err
