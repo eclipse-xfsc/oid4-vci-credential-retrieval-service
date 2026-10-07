@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"math/big"
 	"net"
 	"net/http"
@@ -195,7 +196,7 @@ func validateIssuedCredential(ctx context.Context, raw json.RawMessage, expected
 		return errors.New("issued credential must be a compact JWT/SD-JWT string or an LDP VC JSON object")
 	}
 
-	log.Logger.Info("received credentials", vc)
+	slog.Info("received credentials", vc)
 
 	return validateLDPIssuedCredential(ctx, vc, expectedCredentialIssuer)
 }
