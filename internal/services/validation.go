@@ -189,15 +189,14 @@ func validateIssuedCredential(ctx context.Context, raw json.RawMessage, expected
 		if strings.TrimSpace(compact) == "" {
 			return errors.New("issued credential is empty")
 		}
+		slog.Info("Issued Credential", compact)
 		return validateJWTIssuedCredential(ctx, compact, expectedCredentialIssuer)
 	}
 	var vc map[string]any
 	if err := json.Unmarshal(raw, &vc); err != nil || vc == nil {
 		return errors.New("issued credential must be a compact JWT/SD-JWT string or an LDP VC JSON object")
 	}
-
-	slog.Info("received credentials", vc)
-
+	slog.Info("Issued Credential", vc)
 	return validateLDPIssuedCredential(ctx, vc, expectedCredentialIssuer)
 }
 
