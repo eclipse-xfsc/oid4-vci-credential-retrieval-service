@@ -155,8 +155,15 @@ func ValidateHolderBinding(compact, nonce, audience string) error {
 	return nil
 }
 
-// ValidateCredentialResponse validates every immediately issued JWT VC / SD-JWT VC
-// before it is persisted. Deferred responses are returned to the caller without storage.
+// verifyIssuedCredentialProof is a test seam around the Crypto Provider Signer verification API.
+// Production delegates cryptographic VC proof verification for both LDP VC and SD-JWT VC to
+// POST /v1/credential/verify so this service does not maintain a second cryptographic stack.
+var verifyIssuedCredentialProof = verifyCredentialWithSigner
+
+// ValidateCredentialResponse validates every immediately issued credential before it is persisted.
+// Compact JWT/SD-JWT and JSON-LD/LDP credentials delegate cryptographic proof verification to
+// the Crypto Provider Signer. This service additionally enforces issuer binding, validity and status.
+// Deferred responses are returned to the caller without storage.
 func ValidateCredentialResponse(ctx context.Context, response *credential.CredentialResponse, expectedCredentialIssuer string) error {
 	if response == nil {
 		return errors.New("credential response is nil")
@@ -168,30 +175,162 @@ func ValidateCredentialResponse(ctx context.Context, response *credential.Creden
 		return errors.New("credential response contains no credentials")
 	}
 	for i, item := range response.Credentials {
-		var compact string
-		if err := json.Unmarshal(item.Credential, &compact); err != nil || strings.TrimSpace(compact) == "" {
-			return fmt.Errorf("credential[%d]: wallet verification currently requires a compact JWT or SD-JWT credential", i)
-		}
-		issuerJWT := strings.Split(compact, "~")[0]
-		header, claims, signingInput, signature, err := parseCompactJWT(issuerJWT)
-		if err != nil {
-			return fmt.Errorf("credential[%d]: parse issued credential: %w", i, err)
-		}
-		issuer := issuerFromClaims(claims)
-		if issuer == "" {
-			return fmt.Errorf("credential[%d]: issued credential has no issuer", i)
-		}
-		if err := verifyJWTSignature(ctx, issuerJWT, header, claims, signingInput, signature, issuer); err != nil {
-			return fmt.Errorf("credential[%d]: verify issued credential signature: %w", i, err)
-		}
-		if err := validateCredentialTimes(claims, time.Now().UTC()); err != nil {
+		if err := validateIssuedCredential(ctx, item.Credential, expectedCredentialIssuer); err != nil {
 			return fmt.Errorf("credential[%d]: %w", i, err)
 		}
-		if expectedCredentialIssuer != "" && !credentialIssuerBound(claims, issuer, expectedCredentialIssuer) {
-			return fmt.Errorf("credential[%d]: issued credential issuer %q is not bound to credential issuer %q", i, issuer, expectedCredentialIssuer)
+	}
+	return nil
+}
+
+func validateIssuedCredential(ctx context.Context, raw json.RawMessage, expectedCredentialIssuer string) error {
+	var compact string
+	if err := json.Unmarshal(raw, &compact); err == nil {
+		if strings.TrimSpace(compact) == "" {
+			return errors.New("issued credential is empty")
 		}
-		if err := validateCredentialStatus(ctx, claims, issuer); err != nil {
-			return fmt.Errorf("credential[%d]: %w", i, err)
+		return validateJWTIssuedCredential(ctx, compact, expectedCredentialIssuer)
+	}
+
+	var vc map[string]any
+	if err := json.Unmarshal(raw, &vc); err != nil || vc == nil {
+		return errors.New("issued credential must be a compact JWT/SD-JWT string or an LDP VC JSON object")
+	}
+	return validateLDPIssuedCredential(ctx, vc, expectedCredentialIssuer)
+}
+
+func validateJWTIssuedCredential(ctx context.Context, compact, expectedCredentialIssuer string) error {
+	issuerJWT := strings.Split(compact, "~")[0]
+	_, claims, _, _, err := parseCompactJWT(issuerJWT)
+	if err != nil {
+		return fmt.Errorf("parse issued JWT/SD-JWT credential: %w", err)
+	}
+	issuer := issuerFromClaims(claims)
+	if issuer == "" {
+		return errors.New("issued JWT/SD-JWT credential has no issuer")
+	}
+	if expectedCredentialIssuer != "" && !credentialIssuerBound(claims, issuer, expectedCredentialIssuer) {
+		return fmt.Errorf("issued credential issuer %q is not bound to credential issuer %q", issuer, expectedCredentialIssuer)
+	}
+	if err := verifyIssuedCredentialProof(ctx, []byte(compact), "dc+sd-jwt"); err != nil {
+		return fmt.Errorf("verify issued JWT/SD-JWT credential proof: %w", err)
+	}
+	if err := validateCredentialTimes(claims, time.Now().UTC()); err != nil {
+		return err
+	}
+	return validateCredentialStatus(ctx, claims, issuer)
+}
+
+func validateLDPIssuedCredential(ctx context.Context, vc map[string]any, expectedCredentialIssuer string) error {
+	issuer := issuerFromClaims(vc)
+	if issuer == "" {
+		return errors.New("issued LDP VC has no issuer")
+	}
+	if !containsCredentialType(vc["type"]) {
+		return errors.New("issued LDP VC type does not contain VerifiableCredential")
+	}
+	if mapValue(vc["credentialSubject"]) == nil {
+		if subjects, ok := vc["credentialSubject"].([]any); !ok || len(subjects) == 0 {
+			return errors.New("issued LDP VC has no credentialSubject")
+		}
+	}
+	if err := validateLDPProofShape(vc["proof"]); err != nil {
+		return err
+	}
+	if expectedCredentialIssuer != "" && !credentialIssuerBound(vc, issuer, expectedCredentialIssuer) {
+		return fmt.Errorf("issued credential issuer %q is not bound to credential issuer %q", issuer, expectedCredentialIssuer)
+	}
+	rawVC, err := json.Marshal(vc)
+	if err != nil {
+		return fmt.Errorf("marshal issued LDP VC for proof verification: %w", err)
+	}
+	if err := verifyIssuedCredentialProof(ctx, rawVC, "ldp_vc"); err != nil {
+		return fmt.Errorf("verify issued LDP VC proof: %w", err)
+	}
+	if err := validateCredentialTimes(vc, time.Now().UTC()); err != nil {
+		return err
+	}
+	return validateCredentialStatus(ctx, vc, issuer)
+}
+
+func verifyCredentialWithSigner(ctx context.Context, rawCredential []byte, format string) error {
+	baseURL := strings.TrimSpace(config.CurrentCredentialRetrievalConfig.SignerURL)
+	if baseURL == "" {
+		return errors.New("signer URL is not configured")
+	}
+	endpoint := strings.TrimRight(baseURL, "/") + "/v1/credential/verify"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(string(rawCredential)))
+	if err != nil {
+		return fmt.Errorf("create signer verification request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("x-format", format)
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("call signer verification endpoint: %w", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20+1))
+	if err != nil {
+		return fmt.Errorf("read signer verification response: %w", err)
+	}
+	if len(body) > 1<<20 {
+		return errors.New("signer verification response exceeds size limit")
+	}
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return fmt.Errorf("signer verification returned HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	var result struct {
+		Valid bool `json:"valid"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return fmt.Errorf("decode signer verification response: %w", err)
+	}
+	if !result.Valid {
+		return errors.New("signer reported credential proof as invalid")
+	}
+	return nil
+}
+
+func containsCredentialType(raw any) bool {
+	switch v := raw.(type) {
+	case string:
+		return v == "VerifiableCredential"
+	case []any:
+		for _, item := range v {
+			if s, ok := item.(string); ok && s == "VerifiableCredential" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func validateLDPProofShape(raw any) error {
+	proofs := make([]map[string]any, 0, 1)
+	if proof := mapValue(raw); proof != nil {
+		proofs = append(proofs, proof)
+	} else if list, ok := raw.([]any); ok {
+		for _, item := range list {
+			if proof := mapValue(item); proof != nil {
+				proofs = append(proofs, proof)
+			}
+		}
+	}
+	if len(proofs) == 0 {
+		return errors.New("issued LDP VC has no proof")
+	}
+	for _, proof := range proofs {
+		if strings.TrimSpace(stringOrEmpty(proof["type"])) == "" {
+			return errors.New("issued LDP VC proof has no type")
+		}
+		if strings.TrimSpace(stringOrEmpty(proof["verificationMethod"])) == "" {
+			return errors.New("issued LDP VC proof has no verificationMethod")
+		}
+		if strings.TrimSpace(stringOrEmpty(proof["proofValue"])) == "" && strings.TrimSpace(stringOrEmpty(proof["jws"])) == "" {
+			return errors.New("issued LDP VC proof has neither proofValue nor jws")
 		}
 	}
 	return nil
@@ -693,6 +832,24 @@ func verifyWithKeys(
 	}
 
 	return errors.New("no usable verification key")
+}
+
+func resolveVerificationKeys(
+	ctx context.Context,
+	issuer string,
+	header map[string]any,
+) ([]verificationKey, error) {
+	kid, _ := header["kid"].(string)
+	kid = strings.TrimSpace(kid)
+
+	if kid != "" {
+		keys, err := resolveVerificationKeysFromKID(ctx, kid)
+		if err == nil && len(keys) > 0 {
+			return keys, nil
+		}
+	}
+
+	return resolveVerificationKeysFromIssuer(ctx, issuer, header)
 }
 
 func resolveVerificationKeysFromKID(

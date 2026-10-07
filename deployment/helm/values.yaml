@@ -67,6 +67,8 @@ config:
   country: DE
   region: EU
   signerTopic: signer-topic
+  signer:
+    url: http://signer:8080
   offeringTopic: offering
   offeringPolicy:
   metadataPolicy:

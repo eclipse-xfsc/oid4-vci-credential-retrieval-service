@@ -12,9 +12,9 @@
             "program": "${fileDirname}",
             "env": {
                 "CREDENTIALRETRIEVAL_OFFERING_TOPIC":"offering",
-                "CREDENTIALRETRIEVAL_CASSANDRA_HOST": "127.0.0.1",
+                "CREDENTIALRETRIEVAL_CASSANDRA_HOSTS": "127.0.0.1",
                 "CREDENTIALRETRIEVAL_CASSANDRA_PORT": "9432",
-                "CREDENTIALRETRIEVAL_CASSANDRA_KEYSPACE": "tenant_space",
+                "CREDENTIALRETRIEVAL_CASSANDRA_KEYSPACE": "ocm",
                 "CREDENTIALRETRIEVAL_SIGNER_TOPIC": "signer-topic",
                 "CREDENTIALRETRIEVAL_STORAGE_TOPIC": "storage.service.store",
                 "CREDENTIALRETRIEVAL_NATS_REQUEST_TIMEOUT": "10s",

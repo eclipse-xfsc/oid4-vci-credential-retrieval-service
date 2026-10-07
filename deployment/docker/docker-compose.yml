@@ -147,13 +147,25 @@ services:
     networks:
       - internal
 
+  sdjwt:
+    image: node-654e3bca7fbeeed18f81d7c7.de-west-1.xaas.plus.cloud/common-services/sd-jwt-service@sha256:877cc84ab74645e6f9229a52a668973bbf1c627fc6f1488de55eed246853040d
+    restart: unless-stopped
+    expose:
+      - "3000"
+    ports:
+      - "3000:3000"
+    networks:
+      - internal
+
   signer:
-    image: node-654e3bca7fbeeed18f81d7c7.ps-xaas.io/tsa/signer:v2.0.6-alpha
+    image: node-654e3bca7fbeeed18f81d7c7.de-west-1.xaas.plus.cloud/tsa/signer:2.3.5
     restart: unless-stopped
     depends_on:
       nats:
         condition: service_healthy
       crypto-provider:
+        condition: service_started
+      sdjwt:
         condition: service_started
     ports:
       - "8888:8080"
@@ -204,9 +216,9 @@ services:
     ports:
       - "8081:8080"
     environment:
-      STATUSLISTSERVICE_DATABASE_PARAMS: sslmode=disable
-      STATUSLISTSERVICE_DATABASE_HOST: postgres
-      STATUSLISTSERVICE_NATS_URL: nats://nats:4222
+      STATUSLIST_DATABASE_PARAMS: sslmode:disable
+      STATUSLIST_DATABASE_HOST: postgres
+      STATUSLIST_NATS_URL: nats://nats:4222
     networks:
       - internal
 
