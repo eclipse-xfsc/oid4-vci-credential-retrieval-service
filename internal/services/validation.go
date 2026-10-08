@@ -216,10 +216,6 @@ func validateJWTIssuedCredential(ctx context.Context, compact, expectedCredentia
 		return errors.New("issued JWT/SD-JWT credential has no issuer")
 	}
 
-	if expectedCredentialIssuer != "" && !credentialIssuerBound(claims, issuer, expectedCredentialIssuer) {
-		return fmt.Errorf("issued credential issuer %q is not bound to credential issuer %q", issuer, expectedCredentialIssuer)
-	}
-
 	if err := verifyIssuedCredentialProof(ctx, []byte(compact), "dc+sd-jwt", verifyContext); err != nil {
 		return fmt.Errorf("verify issued JWT/SD-JWT credential proof: %w", err)
 	}
