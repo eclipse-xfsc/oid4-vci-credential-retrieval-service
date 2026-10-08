@@ -325,7 +325,7 @@ func fetchCredentialData(ctx context.Context, tenantId, groupId string, row type
 	if err != nil {
 		return nil, errors.Join(errors.New("error during getting credential"), err)
 	}
-	if err := ValidateCredentialResponse(ctx, cred, credentialIssuer); err != nil {
+	if err := ValidateCredentialResponse(ctx, cred, credentialIssuer, CredentialVerificationContext{DisclosureFrame: []string{}}); err != nil {
 		return nil, errors.Join(errors.New("wallet validation rejected issued credential"), err)
 	}
 	return cred, nil

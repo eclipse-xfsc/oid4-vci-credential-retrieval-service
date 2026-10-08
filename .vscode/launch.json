@@ -19,7 +19,8 @@
                 "CREDENTIALRETRIEVAL_STORAGE_TOPIC": "storage.service.store",
                 "CREDENTIALRETRIEVAL_NATS_REQUEST_TIMEOUT": "10s",
                 "CREDENTIALRETRIEVAL_DISABLETLS": "true",
-                "CREDENTIALRETRIEVAL_LISTEN_PORT": "8082"
+                "CREDENTIALRETRIEVAL_LISTEN_PORT": "8082",
+                "CREDENTIALRETRIEVAL_SIGNER_URL": "http://localhost:8888"
                 
             }
         }
