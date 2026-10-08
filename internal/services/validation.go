@@ -2,27 +2,16 @@ package services
 
 import (
 	"bytes"
-	"compress/gzip"
-	"compress/zlib"
 	"context"
-	"crypto"
-	"crypto/ecdsa"
-	"crypto/ed25519"
-	"crypto/elliptic"
-	"crypto/rsa"
-	"crypto/sha256"
-	"crypto/sha512"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
-	"math/big"
 	"net"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
 	"time"
 
@@ -30,10 +19,7 @@ import (
 	"github.com/eclipse-xfsc/oid4-vci-vp-library/model/credential"
 )
 
-const (
-	maxRemoteDocumentSize = 2 << 20 // 2 MiB
-	maxStatusListSize     = 16 << 20
-)
+const maxRemoteDocumentSize = 2 << 20 // 2 MiB
 
 // ValidateCredentialIssuerURI validates the issuer URL before any network access is performed.
 // This is deliberately separate from ValidateOffering so callers can prevent SSRF during
@@ -121,7 +107,7 @@ func ValidateOffering(offer *credential.CredentialOfferParameters, metadata *cre
 // Cryptographic verification of the holder proof itself is done by the issuer; here the Wallet
 // ensures that the signer produced a structurally correct proof bound to the requested nonce/audience.
 func ValidateHolderBinding(compact, nonce, audience string) error {
-	header, claims, _, _, err := parseCompactJWT(compact)
+	header, claims, err := decodeJWT(compact)
 	if err != nil {
 		return fmt.Errorf("invalid holder proof JWT: %w", err)
 	}
@@ -157,6 +143,20 @@ func ValidateHolderBinding(compact, nonce, audience string) error {
 	return nil
 }
 
+// CredentialVerificationContext carries tenant-scoped verification parameters.
+type CredentialVerificationContext struct {
+	Namespace       string
+	Group           string
+	TenantID        string
+	GroupID         string
+	DisclosureFrame []string
+}
+
+type credentialVerificationRequest struct {
+	Credential      string   `json:"credential"`
+	DisclosureFrame []string `json:"disclosureFrame,omitempty"`
+}
+
 // verifyIssuedCredentialProof is a test seam around the Crypto Provider Signer verification API.
 // Production delegates cryptographic VC proof verification for both LDP VC and SD-JWT VC to
 // POST /v1/credential/verify so this service does not maintain a second cryptographic stack.
@@ -164,9 +164,13 @@ var verifyIssuedCredentialProof = verifyCredentialWithSigner
 
 // ValidateCredentialResponse validates every immediately issued credential before it is persisted.
 // Compact JWT/SD-JWT and JSON-LD/LDP credentials delegate cryptographic proof verification to
-// the Crypto Provider Signer. This service additionally enforces issuer binding, validity and status.
+// the Crypto Provider Signer. This service additionally enforces issuer binding and validity.
 // Deferred responses are returned to the caller without storage.
-func ValidateCredentialResponse(ctx context.Context, response *credential.CredentialResponse, expectedCredentialIssuer string) error {
+func ValidateCredentialResponse(ctx context.Context, response *credential.CredentialResponse, expectedCredentialIssuer string, verificationContext ...CredentialVerificationContext) error {
+	verifyContext := CredentialVerificationContext{}
+	if len(verificationContext) > 0 {
+		verifyContext = verificationContext[0]
+	}
 	if response == nil {
 		return errors.New("credential response is nil")
 	}
@@ -177,33 +181,33 @@ func ValidateCredentialResponse(ctx context.Context, response *credential.Creden
 		return errors.New("credential response contains no credentials")
 	}
 	for i, item := range response.Credentials {
-		if err := validateIssuedCredential(ctx, item.Credential, expectedCredentialIssuer); err != nil {
+		if err := validateIssuedCredential(ctx, item.Credential, expectedCredentialIssuer, verifyContext); err != nil {
 			return fmt.Errorf("credential[%d]: %w", i, err)
 		}
 	}
 	return nil
 }
 
-func validateIssuedCredential(ctx context.Context, raw json.RawMessage, expectedCredentialIssuer string) error {
+func validateIssuedCredential(ctx context.Context, raw json.RawMessage, expectedCredentialIssuer string, verifyContext CredentialVerificationContext) error {
 	var compact string
 	if err := json.Unmarshal(raw, &compact); err == nil {
 		if strings.TrimSpace(compact) == "" {
 			return errors.New("issued credential is empty")
 		}
 		slog.Info("Issued Credential", compact)
-		return validateJWTIssuedCredential(ctx, compact, expectedCredentialIssuer)
+		return validateJWTIssuedCredential(ctx, compact, expectedCredentialIssuer, verifyContext)
 	}
 	var vc map[string]any
 	if err := json.Unmarshal(raw, &vc); err != nil || vc == nil {
 		return errors.New("issued credential must be a compact JWT/SD-JWT string or an LDP VC JSON object")
 	}
 	slog.Info("Issued Credential", vc)
-	return validateLDPIssuedCredential(ctx, vc, expectedCredentialIssuer)
+	return validateLDPIssuedCredential(ctx, vc, expectedCredentialIssuer, verifyContext)
 }
 
-func validateJWTIssuedCredential(ctx context.Context, compact, expectedCredentialIssuer string) error {
+func validateJWTIssuedCredential(ctx context.Context, compact, expectedCredentialIssuer string, verifyContext CredentialVerificationContext) error {
 	issuerJWT := strings.Split(compact, "~")[0]
-	_, claims, _, _, err := parseCompactJWT(issuerJWT)
+	claims, err := decodeJWTClaims(issuerJWT)
 	if err != nil {
 		return fmt.Errorf("parse issued JWT/SD-JWT credential: %w", err)
 	}
@@ -212,21 +216,21 @@ func validateJWTIssuedCredential(ctx context.Context, compact, expectedCredentia
 		return errors.New("issued JWT/SD-JWT credential has no issuer")
 	}
 
-	// if expectedCredentialIssuer != "" && !credentialIssuerBound(claims, issuer, expectedCredentialIssuer) {
-	// 	return fmt.Errorf("issued credential issuer %q is not bound to credential issuer %q", issuer, expectedCredentialIssuer)
-	// }
+	if expectedCredentialIssuer != "" && !credentialIssuerBound(claims, issuer, expectedCredentialIssuer) {
+		return fmt.Errorf("issued credential issuer %q is not bound to credential issuer %q", issuer, expectedCredentialIssuer)
+	}
 
-	if err := verifyIssuedCredentialProof(ctx, []byte(compact), "dc+sd-jwt"); err != nil {
+	if err := verifyIssuedCredentialProof(ctx, []byte(compact), "dc+sd-jwt", verifyContext); err != nil {
 		return fmt.Errorf("verify issued JWT/SD-JWT credential proof: %w", err)
 	}
 
 	if err := validateCredentialTimes(claims, time.Now().UTC()); err != nil {
 		return err
 	}
-	return validateCredentialStatus(ctx, claims, issuer)
+	return nil
 }
 
-func validateLDPIssuedCredential(ctx context.Context, vc map[string]any, expectedCredentialIssuer string) error {
+func validateLDPIssuedCredential(ctx context.Context, vc map[string]any, expectedCredentialIssuer string, verifyContext CredentialVerificationContext) error {
 	issuer := issuerFromClaims(vc)
 	if issuer == "" {
 		return errors.New("issued LDP VC has no issuer")
@@ -249,25 +253,28 @@ func validateLDPIssuedCredential(ctx context.Context, vc map[string]any, expecte
 	if err != nil {
 		return fmt.Errorf("marshal issued LDP VC for proof verification: %w", err)
 	}
-	if err := verifyIssuedCredentialProof(ctx, rawVC, "ldp_vc"); err != nil {
+	if err := verifyIssuedCredentialProof(ctx, rawVC, "ldp_vc", verifyContext); err != nil {
 		return fmt.Errorf("verify issued LDP VC proof: %w", err)
 	}
 	if err := validateCredentialTimes(vc, time.Now().UTC()); err != nil {
 		return err
 	}
-	return validateCredentialStatus(ctx, vc, issuer)
+	return nil
 }
 
-func verifyCredentialWithSigner(ctx context.Context, rawCredential []byte, format string) error {
+func verifyCredentialWithSigner(ctx context.Context, rawCredential []byte, format string, verifyContext CredentialVerificationContext) error {
 	baseURL := strings.TrimSpace(config.CurrentCredentialRetrievalConfig.SignerURL)
 	if baseURL == "" {
 		return errors.New("signer URL is not configured")
+	}
+	if format != "dc+sd-jwt" && format != "ldp_vc" {
+		return fmt.Errorf("unsupported credential verification format %q", format)
 	}
 	endpoint := strings.TrimRight(baseURL, "/") + "/v1/credential/verify"
 	payload := map[string]any{"credential": base64.StdEncoding.EncodeToString(rawCredential)}
 	if format == "dc+sd-jwt" {
 		// Keep the field present even if no frame was supplied by the caller.
-		payload["disclosureFrame"] = []string{}
+		payload["disclosureFrame"] = verifyContext.DisclosureFrame
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -280,27 +287,26 @@ func verifyCredentialWithSigner(ctx context.Context, rawCredential []byte, forma
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("x-format", format)
-
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("call signer verification endpoint: %w", err)
 	}
 	defer resp.Body.Close()
-	body, err = io.ReadAll(io.LimitReader(resp.Body, 1<<20+1))
+	responseBody, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20+1))
 	if err != nil {
 		return fmt.Errorf("read signer verification response: %w", err)
 	}
-	if len(body) > 1<<20 {
+	if len(responseBody) > 1<<20 {
 		return errors.New("signer verification response exceeds size limit")
 	}
-	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return fmt.Errorf("signer verification returned HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("signer verification returned HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(responseBody)))
 	}
 	var result struct {
 		Valid bool `json:"valid"`
 	}
-	if err := json.Unmarshal(body, &result); err != nil {
+	if err := json.Unmarshal(responseBody, &result); err != nil {
 		return fmt.Errorf("decode signer verification response: %w", err)
 	}
 	if !result.Valid {
@@ -436,200 +442,6 @@ func validateCredentialTimes(claims map[string]any, now time.Time) error {
 	return nil
 }
 
-func validateCredentialStatus(ctx context.Context, claims map[string]any, credentialIssuer string) error {
-	vc := mapValue(claims["vc"])
-	if vc == nil {
-		vc = claims
-	}
-	if raw, ok := vc["credentialStatus"]; ok {
-		entries := statusEntries(raw)
-		for _, entry := range entries {
-			if err := checkW3CStatus(ctx, entry, credentialIssuer); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
-
-	// OAuth 2.0 Status List / JWT Status List style status claim.
-	if st := mapValue(claims["status"]); st != nil {
-		if ref := mapValue(st["status_list"]); ref != nil {
-			return checkTokenStatusList(ctx, ref, credentialIssuer)
-		}
-	}
-	return nil
-}
-
-func checkW3CStatus(ctx context.Context, entry map[string]any, credentialIssuer string) error {
-	typ, _ := entry["type"].(string)
-	if typ != "StatusList2021Entry" && typ != "BitstringStatusListEntry" {
-		return fmt.Errorf("unsupported credentialStatus type %q", typ)
-	}
-	purpose, _ := entry["statusPurpose"].(string)
-	if purpose != "revocation" && purpose != "suspension" {
-		return fmt.Errorf("unsupported credential status purpose %q", purpose)
-	}
-	indexString, _ := entry["statusListIndex"].(string)
-	idx, err := strconv.ParseUint(indexString, 10, 64)
-	if err != nil {
-		return fmt.Errorf("invalid statusListIndex: %w", err)
-	}
-	statusURL, _ := entry["statusListCredential"].(string)
-	body, contentType, err := fetchProtected(ctx, statusURL, credentialIssuer)
-	if err != nil {
-		return fmt.Errorf("retrieve status list: %w", err)
-	}
-
-	var listClaims map[string]any
-	trimmed := strings.TrimSpace(string(body))
-	if strings.Count(trimmed, ".") == 2 {
-		header, claims, signingInput, signature, err := parseCompactJWT(trimmed)
-		if err != nil {
-			return fmt.Errorf("parse status list JWT: %w", err)
-		}
-		iss := issuerFromClaims(claims)
-		if iss == "" {
-			return errors.New("status list JWT has no issuer")
-		}
-		if err := verifyJWTSignature(ctx, trimmed, header, claims, signingInput, signature, iss); err != nil {
-			return fmt.Errorf("verify status list JWT: %w", err)
-		}
-		if sub, _ := claims["sub"].(string); sub != "" && sub != statusURL {
-			return errors.New("status list JWT sub does not match requested URI")
-		}
-		if err := validateCredentialTimes(claims, time.Now().UTC()); err != nil {
-			return fmt.Errorf("status list validity: %w", err)
-		}
-		listClaims = claims
-	} else {
-		// A JSON-LD status-list credential needs Data Integrity proof verification. This
-		// service intentionally refuses unsigned/unverifiable JSON rather than trusting it.
-		if strings.Contains(contentType, "json") {
-			return errors.New("JSON-LD status list received but Data Integrity proof verification is not available; use a signed JWT status list")
-		}
-		return errors.New("unsupported status list representation")
-	}
-
-	encoded, listPurpose := findEncodedList(listClaims)
-	if encoded == "" {
-		return errors.New("status list JWT contains no encoded list")
-	}
-	if listPurpose != "" && listPurpose != purpose {
-		return fmt.Errorf("statusPurpose mismatch: credential=%q list=%q", purpose, listPurpose)
-	}
-	bits, err := decodeCompressedBitstring(encoded)
-	if err != nil {
-		return fmt.Errorf("decode status list: %w", err)
-	}
-	if idx >= uint64(len(bits))*8 {
-		return errors.New("statusListIndex outside status list")
-	}
-	set := bits[idx/8]&(1<<uint(7-(idx%8))) != 0 // W3C lists are MSB-first.
-	if set {
-		return fmt.Errorf("credential is %s", map[string]string{"revocation": "revoked", "suspension": "suspended"}[purpose])
-	}
-	return nil
-}
-
-func checkTokenStatusList(ctx context.Context, ref map[string]any, credentialIssuer string) error {
-	idx, ok := uintValue(ref["idx"])
-	if !ok {
-		return errors.New("status.status_list.idx is invalid")
-	}
-	uri, _ := ref["uri"].(string)
-	body, _, err := fetchProtected(ctx, uri, credentialIssuer)
-	if err != nil {
-		return fmt.Errorf("retrieve token status list: %w", err)
-	}
-	compact := strings.TrimSpace(string(body))
-	header, claims, signingInput, signature, err := parseCompactJWT(compact)
-	if err != nil {
-		return fmt.Errorf("parse token status list: %w", err)
-	}
-	iss := issuerFromClaims(claims)
-	if iss == "" {
-		return errors.New("token status list has no issuer")
-	}
-	if err := verifyJWTSignature(ctx, compact, header, claims, signingInput, signature, iss); err != nil {
-		return fmt.Errorf("verify token status list: %w", err)
-	}
-	if sub, _ := claims["sub"].(string); sub != "" && sub != uri {
-		return errors.New("token status list sub does not match requested URI")
-	}
-	statusList := mapValue(claims["status_list"])
-	if statusList == nil {
-		return errors.New("token status list misses status_list claim")
-	}
-	bitsPerStatus, ok := uintValue(statusList["bits"])
-	if !ok || bitsPerStatus == 0 || bitsPerStatus > 8 {
-		return errors.New("unsupported token status list bits value")
-	}
-	encoded, _ := statusList["lst"].(string)
-	bits, err := decodeCompressedBitstring(encoded)
-	if err != nil {
-		return fmt.Errorf("decode token status list: %w", err)
-	}
-	startBit := idx * bitsPerStatus
-	if startBit+bitsPerStatus > uint64(len(bits))*8 {
-		return errors.New("token status list index outside list")
-	}
-	var status uint64
-	for i := uint64(0); i < bitsPerStatus; i++ {
-		bit := (bits[(startBit+i)/8] >> uint((startBit+i)%8)) & 1 // token lists are LSB-first.
-		status |= uint64(bit) << i
-	}
-	if status != 0 {
-		return fmt.Errorf("credential has non-valid token status %d", status)
-	}
-	return nil
-}
-
-func fetchProtected(ctx context.Context, rawURL, credentialIssuer string) ([]byte, string, error) {
-	if err := validateRemoteURI(rawURL, config.CurrentCredentialRetrievalConfig.DisableTLS); err != nil {
-		return nil, "", err
-	}
-	if !sameOriginOrConfigured(rawURL, credentialIssuer) {
-		return nil, "", errors.New("status list origin is not bound to credential issuer")
-	}
-	client := &http.Client{
-		Timeout:   10 * time.Second,
-		Transport: &http.Transport{DialContext: safeDialContext},
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) >= 3 {
-				return errors.New("too many redirects")
-			}
-			if err := validateRemoteURI(req.URL.String(), config.CurrentCredentialRetrievalConfig.DisableTLS); err != nil {
-				return err
-			}
-			if !sameOriginOrConfigured(req.URL.String(), credentialIssuer) {
-				return errors.New("redirect leaves trusted status-list origin")
-			}
-			return nil
-		},
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
-	if err != nil {
-		return nil, "", err
-	}
-	req.Header.Set("Accept", "application/statuslist+jwt")
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, "", err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, "", fmt.Errorf("status endpoint returned HTTP %d", resp.StatusCode)
-	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxRemoteDocumentSize+1))
-	if err != nil {
-		return nil, "", err
-	}
-	if len(body) > maxRemoteDocumentSize {
-		return nil, "", errors.New("status document exceeds size limit")
-	}
-	return body, resp.Header.Get("Content-Type"), nil
-}
-
 func safeDialContext(ctx context.Context, network, address string) (net.Conn, error) {
 	host, port, err := net.SplitHostPort(address)
 	if err != nil {
@@ -676,598 +488,33 @@ func sameOrigin(rawURL, issuer string) bool {
 	return err1 == nil && err2 == nil && strings.EqualFold(u.Scheme, i.Scheme) && strings.EqualFold(u.Host, i.Host)
 }
 
-func sameOriginOrConfigured(rawURL, credentialIssuer string) bool {
-	u, err1 := url.Parse(rawURL)
-	i, err2 := url.Parse(credentialIssuer)
-	if err1 == nil && err2 == nil && strings.EqualFold(u.Scheme, i.Scheme) && strings.EqualFold(u.Host, i.Host) {
-		return true
-	}
-	if err1 == nil && strings.HasPrefix(credentialIssuer, "did:web:") {
-		parts := strings.Split(strings.TrimPrefix(credentialIssuer, "did:web:"), ":")
-		if len(parts) > 0 {
-			host, _ := url.PathUnescape(parts[0])
-			if strings.EqualFold(u.Hostname(), host) {
-				return true
-			}
-		}
-	}
-	for _, allowed := range config.CurrentCredentialRetrievalConfig.StatusListAllowedOrigins {
-		a, err := url.Parse(strings.TrimSpace(allowed))
-		if err == nil && strings.EqualFold(u.Scheme, a.Scheme) && strings.EqualFold(u.Host, a.Host) {
-			return true
-		}
-	}
-	return false
-}
-
-func verifyJWTSignature(
-	ctx context.Context,
-	compact string,
-	header, claims map[string]any,
-	signingInput, signature []byte,
-	issuer string,
-) error {
-	alg, _ := header["alg"].(string)
-	if alg == "" || alg == "none" || strings.HasPrefix(alg, "HS") {
-		return fmt.Errorf("unsupported/unsafe JWT alg %q", alg)
-	}
-
-	kid, _ := header["kid"].(string)
-	kid = strings.TrimSpace(kid)
-
-	var (
-		keys             []verificationKey
-		err              error
-		kidResolutionErr error
-	)
-
-	//
-	// 1. Prefer direct resolution via kid.
-	//
-	if kid != "" {
-		keys, kidResolutionErr = resolveVerificationKeysFromKID(ctx, kid)
-
-		if kidResolutionErr == nil && len(keys) > 0 {
-			if err := verifyWithKeys(
-				alg,
-				kid,
-				keys,
-				signingInput,
-				signature,
-			); err == nil {
-				return nil
-			} else {
-				// The kid was successfully resolved.
-				//
-				// Do NOT silently verify with a different issuer key if
-				// the explicitly referenced key exists but the signature
-				// is invalid.
-				return fmt.Errorf(
-					"signature verification with kid %q failed: %w",
-					kid,
-					err,
-				)
-			}
-		}
-	}
-
-	//
-	// 2. Direct kid resolution was unavailable/failed.
-	//    Fall back to issuer based discovery.
-	//
-	keys, err = resolveVerificationKeysFromIssuer(ctx, issuer, header)
-	if err != nil {
-		if kidResolutionErr != nil {
-			return fmt.Errorf(
-				"failed to resolve verification key via kid %q (%v) and issuer %q: %w",
-				kid,
-				kidResolutionErr,
-				issuer,
-				err,
-			)
-		}
-
-		return fmt.Errorf(
-			"failed to resolve verification keys for issuer %q: %w",
-			issuer,
-			err,
-		)
-	}
-
-	if err := verifyWithKeys(
-		alg,
-		kid,
-		keys,
-		signingInput,
-		signature,
-	); err != nil {
-		if kidResolutionErr != nil {
-			return fmt.Errorf(
-				"signature verification failed after kid resolution %q failed (%v): %w",
-				kid,
-				kidResolutionErr,
-				err,
-			)
-		}
-
-		return err
-	}
-
-	return nil
-}
-
-func verifyWithKeys(
-	alg string,
-	kid string,
-	keys []verificationKey,
-	signingInput []byte,
-	signature []byte,
-) error {
-	var (
-		lastErr error
-		matched bool
-	)
-
-	for _, raw := range keys {
-		//
-		// If the JWT specifies a kid, only that exact key may be used.
-		//
-		if kid != "" {
-			if raw.Kid != kid {
-				continue
-			}
-
-			matched = true
-		} else {
-			matched = true
-		}
-
-		if err := verifySignature(
-			alg,
-			raw.Key,
-			signingInput,
-			signature,
-		); err != nil {
-			lastErr = err
-			continue
-		}
-
-		return nil
-	}
-
-	if kid != "" && !matched {
-		return fmt.Errorf(
-			"no verification key matching kid %q",
-			kid,
-		)
-	}
-
-	if lastErr != nil {
-		return lastErr
-	}
-
-	return errors.New("no usable verification key")
-}
-
-func resolveVerificationKeys(
-	ctx context.Context,
-	issuer string,
-	header map[string]any,
-) ([]verificationKey, error) {
-	kid, _ := header["kid"].(string)
-	kid = strings.TrimSpace(kid)
-
-	if kid != "" {
-		keys, err := resolveVerificationKeysFromKID(ctx, kid)
-		if err == nil && len(keys) > 0 {
-			return keys, nil
-		}
-	}
-
-	return resolveVerificationKeysFromIssuer(ctx, issuer, header)
-}
-
-func resolveVerificationKeysFromKID(
-	ctx context.Context,
-	kid string,
-) ([]verificationKey, error) {
-	kid = strings.TrimSpace(kid)
-
-	if kid == "" {
-		return nil, errors.New("kid is empty")
-	}
-
-	//
-	// DID URL
-	//
-	if strings.HasPrefix(kid, "did:web:") {
-		did := kid
-
-		if idx := strings.IndexByte(did, '#'); idx >= 0 {
-			did = did[:idx]
-		}
-
-		keys, err := resolveDIDWeb(ctx, did)
-		if err != nil {
-			return nil, fmt.Errorf(
-				"resolve DID from kid %q: %w",
-				kid,
-				err,
-			)
-		}
-
-		//
-		// kid identifies a concrete verification method.
-		//
-		if strings.Contains(kid, "#") {
-			for _, key := range keys {
-				if key.Kid == kid {
-					return []verificationKey{key}, nil
-				}
-			}
-
-			return nil, fmt.Errorf(
-				"DID document %q contains no verification method %q",
-				did,
-				kid,
-			)
-		}
-
-		return keys, nil
-	}
-
-	//
-	// Do NOT fetch arbitrary HTTP URLs from kid.
-	//
-	// kid is controlled by the JWT sender and blindly fetching an
-	// https://... kid would introduce an SSRF primitive.
-	//
-	return nil, fmt.Errorf(
-		"kid %q is not directly resolvable",
-		kid,
-	)
-}
-
-type verificationKey struct {
-	Kid string
-	Key crypto.PublicKey
-}
-
-func resolveVerificationKeysFromIssuer(ctx context.Context, issuer string, header map[string]any) ([]verificationKey, error) {
-	// Never trust an embedded JWK from an issued credential as its own trust anchor.
-	// Verification keys must be resolved from an issuer-controlled trust source.
-	if mapValue(header["jwk"]) != nil {
-		return nil, errors.New("embedded jwk is not accepted as an issuer trust anchor")
-	}
-	if _, ok := header["x5c"]; ok {
-		return nil, errors.New("x5c verification requires an explicitly configured trust store")
-	}
-	if strings.HasPrefix(issuer, "did:web:") {
-		return resolveDIDWeb(ctx, issuer)
-	}
-	if err := validateRemoteURI(issuer, config.CurrentCredentialRetrievalConfig.DisableTLS); err != nil {
-		return nil, fmt.Errorf("cannot resolve keys for issuer %q: %w", issuer, err)
-	}
-	wellKnown, err := issuerWellKnown(issuer, "/.well-known/openid-configuration")
-	if err != nil {
-		return nil, err
-	}
-	meta, err := fetchJSON(ctx, wellKnown)
-	if err != nil {
-		wellKnown, _ = issuerWellKnown(issuer, "/.well-known/oauth-authorization-server")
-		meta, err = fetchJSON(ctx, wellKnown)
-	}
-	if err != nil {
-		return nil, fmt.Errorf("resolve issuer metadata: %w", err)
-	}
-	jwksURI, _ := meta["jwks_uri"].(string)
-	if jwksURI == "" {
-		return nil, errors.New("issuer metadata has no jwks_uri")
-	}
-	set, err := fetchJSON(ctx, jwksURI)
-	if err != nil {
-		return nil, err
-	}
-	arr, _ := set["keys"].([]any)
-	return parseJWKSet(arr)
-}
-
-func resolveDIDWeb(ctx context.Context, did string) ([]verificationKey, error) {
-	parts := strings.Split(strings.TrimPrefix(did, "did:web:"), ":")
-	if len(parts) == 0 {
-		return nil, errors.New("invalid did:web")
-	}
-	host, err := url.PathUnescape(parts[0])
-	if err != nil {
-		return nil, err
-	}
-	var target string
-	if len(parts) == 1 {
-		target = "https://" + host + "/.well-known/did.json"
-	} else {
-		target = "https://" + host + "/" + strings.Join(parts[1:], "/") + "/did.json"
-	}
-	doc, err := fetchJSON(ctx, target)
-	if err != nil {
-		return nil, err
-	}
-	methods, _ := doc["verificationMethod"].([]any)
-	keys := make([]verificationKey, 0, len(methods))
-	for _, m := range methods {
-		mm := mapValue(m)
-		if mm == nil {
-			continue
-		}
-		j := mapValue(mm["publicKeyJwk"])
-		if j == nil {
-			continue
-		}
-		key, err := parseJWK(j)
-		if err != nil {
-			continue
-		}
-		keys = append(keys, verificationKey{Kid: stringOrEmpty(mm["id"]), Key: key})
-	}
-	if len(keys) == 0 {
-		return nil, errors.New("did:web document contains no publicKeyJwk verification method")
-	}
-	return keys, nil
-}
-
-func fetchJSON(ctx context.Context, rawURL string) (map[string]any, error) {
-	if err := validateRemoteURI(rawURL, config.CurrentCredentialRetrievalConfig.DisableTLS); err != nil {
-		return nil, err
-	}
-	client := &http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{DialContext: safeDialContext}, CheckRedirect: func(req *http.Request, via []*http.Request) error {
-		if len(via) >= 3 {
-			return errors.New("too many redirects")
-		}
-		return validateRemoteURI(req.URL.String(), config.CurrentCredentialRetrievalConfig.DisableTLS)
-	}}
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
-	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxRemoteDocumentSize+1))
-	if err != nil {
-		return nil, err
-	}
-	if len(body) > maxRemoteDocumentSize {
-		return nil, errors.New("remote JSON document exceeds size limit")
-	}
-	var out map[string]any
-	if err := json.Unmarshal(body, &out); err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func issuerWellKnown(issuer, wellKnown string) (string, error) {
-	u, err := url.Parse(issuer)
-	if err != nil {
-		return "", err
-	}
-	path := strings.TrimSuffix(u.EscapedPath(), "/")
-	u.RawPath = ""
-	u.Path = wellKnown + path
-	u.RawQuery = ""
-	u.Fragment = ""
-	return u.String(), nil
-}
-
-func parseJWKSet(arr []any) ([]verificationKey, error) {
-	keys := make([]verificationKey, 0, len(arr))
-	for _, v := range arr {
-		m := mapValue(v)
-		if m == nil {
-			continue
-		}
-		k, err := parseJWK(m)
-		if err != nil {
-			continue
-		}
-		keys = append(keys, verificationKey{Kid: stringOrEmpty(m["kid"]), Key: k})
-	}
-	if len(keys) == 0 {
-		return nil, errors.New("JWKS contains no supported key")
-	}
-	return keys, nil
-}
-
-func parseJWK(m map[string]any) (crypto.PublicKey, error) {
-	switch stringOrEmpty(m["kty"]) {
-	case "RSA":
-		n, err := decodeBigInt(stringOrEmpty(m["n"]))
-		if err != nil {
-			return nil, err
-		}
-		eBytes, err := base64.RawURLEncoding.DecodeString(stringOrEmpty(m["e"]))
-		if err != nil {
-			return nil, err
-		}
-		e := 0
-		for _, b := range eBytes {
-			e = e<<8 + int(b)
-		}
-		if e == 0 {
-			return nil, errors.New("invalid RSA exponent")
-		}
-		return &rsa.PublicKey{N: n, E: e}, nil
-	case "EC":
-		var curve elliptic.Curve
-		switch stringOrEmpty(m["crv"]) {
-		case "P-256":
-			curve = elliptic.P256()
-		case "P-384":
-			curve = elliptic.P384()
-		case "P-521":
-			curve = elliptic.P521()
-		default:
-			return nil, errors.New("unsupported EC curve")
-		}
-		x, err := decodeBigInt(stringOrEmpty(m["x"]))
-		if err != nil {
-			return nil, err
-		}
-		y, err := decodeBigInt(stringOrEmpty(m["y"]))
-		if err != nil {
-			return nil, err
-		}
-		if !curve.IsOnCurve(x, y) {
-			return nil, errors.New("EC JWK point is not on curve")
-		}
-		return &ecdsa.PublicKey{Curve: curve, X: x, Y: y}, nil
-	case "OKP":
-		if stringOrEmpty(m["crv"]) != "Ed25519" {
-			return nil, errors.New("unsupported OKP curve")
-		}
-		x, err := base64.RawURLEncoding.DecodeString(stringOrEmpty(m["x"]))
-		if err != nil {
-			return nil, err
-		}
-		if len(x) != ed25519.PublicKeySize {
-			return nil, errors.New("invalid Ed25519 key")
-		}
-		return ed25519.PublicKey(x), nil
-	default:
-		return nil, errors.New("unsupported JWK kty")
-	}
-}
-
-func verifySignature(alg string, key crypto.PublicKey, input, sig []byte) error {
-	var digest []byte
-	var hash crypto.Hash
-	switch alg {
-	case "ES256", "RS256", "PS256":
-		h := sha256.Sum256(input)
-		digest = h[:]
-		hash = crypto.SHA256
-	case "ES384", "RS384", "PS384":
-		h := sha512.Sum384(input)
-		digest = h[:]
-		hash = crypto.SHA384
-	case "ES512", "RS512", "PS512":
-		h := sha512.Sum512(input)
-		digest = h[:]
-		hash = crypto.SHA512
-	case "EdDSA":
-		k, ok := key.(ed25519.PublicKey)
-		if !ok || !ed25519.Verify(k, input, sig) {
-			return errors.New("EdDSA signature verification failed")
-		}
-		return nil
-	default:
-		return fmt.Errorf("unsupported signature algorithm %q", alg)
-	}
-	switch k := key.(type) {
-	case *rsa.PublicKey:
-		if strings.HasPrefix(alg, "PS") {
-			return rsa.VerifyPSS(k, hash, digest, sig, nil)
-		}
-		return rsa.VerifyPKCS1v15(k, hash, digest, sig)
-	case *ecdsa.PublicKey:
-		sz := (k.Curve.Params().BitSize + 7) / 8
-		if len(sig) != sz*2 {
-			return errors.New("invalid ECDSA signature size")
-		}
-		r := new(big.Int).SetBytes(sig[:sz])
-		s := new(big.Int).SetBytes(sig[sz:])
-		if !ecdsa.Verify(k, digest, r, s) {
-			return errors.New("ECDSA signature verification failed")
-		}
-		return nil
-	default:
-		return errors.New("JWT algorithm and key type do not match")
-	}
-}
-
-func parseCompactJWT(compact string) (map[string]any, map[string]any, []byte, []byte, error) {
+func decodeJWT(compact string) (map[string]any, map[string]any, error) {
 	parts := strings.Split(compact, ".")
 	if len(parts) != 3 {
-		return nil, nil, nil, nil, errors.New("JWT must have three segments")
+		return nil, nil, errors.New("JWT must have three segments")
 	}
-	hb, err := base64.RawURLEncoding.DecodeString(parts[0])
+	headerBytes, err := base64.RawURLEncoding.DecodeString(parts[0])
 	if err != nil {
-		return nil, nil, nil, nil, err
+		return nil, nil, fmt.Errorf("decode JWT header: %w", err)
 	}
-	pb, err := base64.RawURLEncoding.DecodeString(parts[1])
+	payloadBytes, err := base64.RawURLEncoding.DecodeString(parts[1])
 	if err != nil {
-		return nil, nil, nil, nil, err
+		return nil, nil, fmt.Errorf("decode JWT payload: %w", err)
 	}
-	sig, err := base64.RawURLEncoding.DecodeString(parts[2])
-	if err != nil {
-		return nil, nil, nil, nil, err
+	var header map[string]any
+	if err := json.Unmarshal(headerBytes, &header); err != nil {
+		return nil, nil, fmt.Errorf("decode JWT header JSON: %w", err)
 	}
-	var h, p map[string]any
-	if err := json.Unmarshal(hb, &h); err != nil {
-		return nil, nil, nil, nil, err
+	var claims map[string]any
+	if err := json.Unmarshal(payloadBytes, &claims); err != nil {
+		return nil, nil, fmt.Errorf("decode JWT claims JSON: %w", err)
 	}
-	if err := json.Unmarshal(pb, &p); err != nil {
-		return nil, nil, nil, nil, err
-	}
-	return h, p, []byte(parts[0] + "." + parts[1]), sig, nil
+	return header, claims, nil
 }
 
-func decodeCompressedBitstring(encoded string) ([]byte, error) {
-	encoded = strings.TrimSpace(encoded)
-	if strings.HasPrefix(encoded, "u") {
-		encoded = strings.TrimPrefix(encoded, "u")
-	}
-	compressed, err := base64.RawURLEncoding.DecodeString(encoded)
-	if err != nil {
-		if b, e := base64.StdEncoding.DecodeString(encoded); e == nil {
-			compressed = b
-		} else {
-			return nil, err
-		}
-	}
-	if len(compressed) == 0 {
-		return nil, errors.New("empty encoded list")
-	}
-	var r io.ReadCloser
-	if gz, e := gzip.NewReader(strings.NewReader(string(compressed))); e == nil {
-		r = gz
-	} else if zr, e := zlib.NewReader(strings.NewReader(string(compressed))); e == nil {
-		r = zr
-	} else {
-		return nil, errors.New("status list is neither gzip nor zlib compressed")
-	}
-	defer r.Close()
-	out, err := io.ReadAll(io.LimitReader(r, maxStatusListSize+1))
-	if err != nil {
-		return nil, err
-	}
-	if len(out) > maxStatusListSize {
-		return nil, errors.New("expanded status list exceeds size limit")
-	}
-	return out, nil
-}
-
-func findEncodedList(claims map[string]any) (string, string) {
-	candidates := []map[string]any{claims, mapValue(claims["credentialSubject"])}
-	if vc := mapValue(claims["vc"]); vc != nil {
-		candidates = append(candidates, vc, mapValue(vc["credentialSubject"]))
-	}
-	for _, c := range candidates {
-		if c == nil {
-			continue
-		}
-		if e, _ := c["encodedList"].(string); e != "" {
-			p, _ := c["statusPurpose"].(string)
-			return e, p
-		}
-		if sl := mapValue(c["status_list"]); sl != nil {
-			if e, _ := sl["lst"].(string); e != "" {
-				return e, ""
-			}
-		}
-	}
-	return "", ""
+func decodeJWTClaims(compact string) (map[string]any, error) {
+	_, claims, err := decodeJWT(compact)
+	return claims, err
 }
 
 func credentialIssuerBound(claims map[string]any, credentialIssuer, expected string) bool {
@@ -1348,22 +595,6 @@ func numericDate(v any) (time.Time, bool) {
 	}
 	return time.Time{}, false
 }
-func uintValue(v any) (uint64, bool) {
-	switch n := v.(type) {
-	case float64:
-		if n < 0 {
-			return 0, false
-		}
-		return uint64(n), true
-	case string:
-		u, e := strconv.ParseUint(n, 10, 64)
-		return u, e == nil
-	case json.Number:
-		u, e := strconv.ParseUint(n.String(), 10, 64)
-		return u, e == nil
-	}
-	return 0, false
-}
 func mapValue(v any) map[string]any { m, _ := v.(map[string]any); return m }
 func nestedMap(m map[string]any, keys ...string) map[string]any {
 	for _, k := range keys {
@@ -1409,29 +640,4 @@ func asMap(v any) (map[string]any, error) {
 	var m map[string]any
 	e = json.Unmarshal(b, &m)
 	return m, e
-}
-func statusEntries(v any) []map[string]any {
-	if m := mapValue(v); m != nil {
-		return []map[string]any{m}
-	}
-	if a, ok := v.([]any); ok {
-		out := []map[string]any{}
-		for _, x := range a {
-			if m := mapValue(x); m != nil {
-				out = append(out, m)
-			}
-		}
-		return out
-	}
-	return nil
-}
-func decodeBigInt(s string) (*big.Int, error) {
-	b, e := base64.RawURLEncoding.DecodeString(s)
-	if e != nil {
-		return nil, e
-	}
-	if len(b) == 0 {
-		return nil, errors.New("empty integer")
-	}
-	return new(big.Int).SetBytes(b), nil
 }

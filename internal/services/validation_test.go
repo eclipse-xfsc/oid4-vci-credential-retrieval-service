@@ -1,7 +1,6 @@
 package services
 
 import (
-	"compress/gzip"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -62,21 +61,6 @@ func TestValidateRemoteURI(t *testing.T) {
 	}
 }
 
-func TestDecodeCompressedBitstring(t *testing.T) {
-	var b strings.Builder
-	zw := gzip.NewWriter(&b)
-	_, _ = zw.Write([]byte{0x80, 0x00})
-	_ = zw.Close()
-	encoded := "u" + base64.RawURLEncoding.EncodeToString([]byte(b.String()))
-	decoded, err := decodeCompressedBitstring(encoded)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(decoded) != 2 || decoded[0] != 0x80 {
-		t.Fatalf("unexpected decoded list: %v", decoded)
-	}
-}
-
 func TestValidateCredentialIssuerURIRejectsUnsafeIssuer(t *testing.T) {
 	// Use JSON round-tripping because the library model may expose the field under
 	// a version-specific Go name while the wire representation is stable.
@@ -86,15 +70,6 @@ func TestValidateCredentialIssuerURIRejectsUnsafeIssuer(t *testing.T) {
 	}
 	if err := ValidateCredentialIssuerURI(&offer); err == nil {
 		t.Fatal("expected unsafe credential issuer URI to be rejected")
-	}
-}
-
-func TestResolveVerificationKeysRejectsEmbeddedJWKTrustAnchor(t *testing.T) {
-	_, err := resolveVerificationKeys(context.Background(), "https://issuer.example", map[string]any{
-		"jwk": map[string]any{"kty": "EC", "crv": "P-256", "x": "x", "y": "y"},
-	})
-	if err == nil || !strings.Contains(err.Error(), "trust anchor") {
-		t.Fatalf("expected embedded JWK trust-anchor rejection, got %v", err)
 	}
 }
 
@@ -109,7 +84,7 @@ func credentialResponseForValidation(t *testing.T, raw string) credential.Creden
 
 func TestValidateCredentialResponseAcceptsSDJWT(t *testing.T) {
 	original := verifyIssuedCredentialProof
-	verifyIssuedCredentialProof = func(_ context.Context, raw []byte, format string) error {
+	verifyIssuedCredentialProof = func(_ context.Context, raw []byte, format string, _ CredentialVerificationContext) error {
 		if format != "dc+sd-jwt" {
 			t.Fatalf("expected dc+sd-jwt format, got %q", format)
 		}
@@ -140,7 +115,7 @@ func TestValidateCredentialResponseAcceptsSDJWT(t *testing.T) {
 
 func TestValidateCredentialResponseAcceptsLDPVC(t *testing.T) {
 	original := verifyIssuedCredentialProof
-	verifyIssuedCredentialProof = func(_ context.Context, raw []byte, format string) error {
+	verifyIssuedCredentialProof = func(_ context.Context, raw []byte, format string, _ CredentialVerificationContext) error {
 		if format != "ldp_vc" {
 			t.Fatalf("expected ldp_vc format, got %q", format)
 		}
@@ -235,8 +210,29 @@ func TestVerifyCredentialWithSignerFormats(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if string(body) != tt.body {
-					t.Fatalf("expected credential body %q, got %q", tt.body, string(body))
+				var payload map[string]json.RawMessage
+				if err := json.Unmarshal(body, &payload); err != nil {
+					t.Fatalf("invalid signer JSON: %v", err)
+				}
+				var encoded string
+				if err := json.Unmarshal(payload["credential"], &encoded); err != nil {
+					t.Fatal(err)
+				}
+				decoded, err := base64.StdEncoding.DecodeString(encoded)
+				if err != nil || string(decoded) != tt.body {
+					t.Fatalf("credential base64 mismatch: %q, %v", decoded, err)
+				}
+				for header, expected := range map[string]string{"x-namespace": "transit", "x-group": "holder", "x-tenantid": "tenant-a", "x-groupid": "group-123"} {
+					if got := r.Header.Get(header); got != expected {
+						t.Errorf("%s: got %q want %q", header, got, expected)
+					}
+				}
+				_, hasFrame := payload["disclosureFrame"]
+				if tt.format == "dc+sd-jwt" && !hasFrame {
+					t.Error("SD-JWT missing disclosureFrame")
+				}
+				if tt.format == "ldp_vc" && hasFrame {
+					t.Error("LDP must not include disclosureFrame")
 				}
 				w.Header().Set("Content-Type", "application/json")
 				_, _ = w.Write([]byte(`{"valid":true}`))
@@ -247,7 +243,7 @@ func TestVerifyCredentialWithSignerFormats(t *testing.T) {
 			config.CurrentCredentialRetrievalConfig.SignerURL = server.URL
 			t.Cleanup(func() { config.CurrentCredentialRetrievalConfig.SignerURL = previous })
 
-			if err := verifyCredentialWithSigner(context.Background(), []byte(tt.body), tt.format); err != nil {
+			if err := verifyCredentialWithSigner(context.Background(), []byte(tt.body), tt.format, CredentialVerificationContext{Namespace: "transit", Group: "holder", TenantID: "tenant-a", GroupID: "group-123", DisclosureFrame: []string{"name"}}); err != nil {
 				t.Fatalf("expected signer verification to succeed: %v", err)
 			}
 		})
@@ -264,7 +260,7 @@ func TestVerifyCredentialWithSignerRejectsInvalidProof(t *testing.T) {
 	config.CurrentCredentialRetrievalConfig.SignerURL = server.URL
 	t.Cleanup(func() { config.CurrentCredentialRetrievalConfig.SignerURL = previous })
 
-	err := verifyCredentialWithSigner(context.Background(), []byte("credential"), "dc+sd-jwt")
+	err := verifyCredentialWithSigner(context.Background(), []byte("credential"), "dc+sd-jwt", CredentialVerificationContext{})
 	if err == nil || !strings.Contains(err.Error(), "invalid") {
 		t.Fatalf("expected invalid signer result to fail, got %v", err)
 	}
@@ -301,7 +297,7 @@ func TestValidateCredentialResponseRejectsSDJWTWithoutIssuer(t *testing.T) {
 func TestValidateCredentialResponseRejectsSDJWTIssuerMismatchBeforeSigner(t *testing.T) {
 	called := false
 	original := verifyIssuedCredentialProof
-	verifyIssuedCredentialProof = func(_ context.Context, _ []byte, _ string) error {
+	verifyIssuedCredentialProof = func(_ context.Context, _ []byte, _ string, _ CredentialVerificationContext) error {
 		called = true
 		return nil
 	}
@@ -323,7 +319,7 @@ func TestValidateCredentialResponseRejectsSDJWTIssuerMismatchBeforeSigner(t *tes
 
 func TestValidateCredentialResponsePropagatesSignerRejectionForSDJWT(t *testing.T) {
 	original := verifyIssuedCredentialProof
-	verifyIssuedCredentialProof = func(_ context.Context, _ []byte, format string) error {
+	verifyIssuedCredentialProof = func(_ context.Context, _ []byte, format string, _ CredentialVerificationContext) error {
 		if format != "dc+sd-jwt" {
 			t.Fatalf("unexpected format %q", format)
 		}
@@ -343,7 +339,7 @@ func TestValidateCredentialResponsePropagatesSignerRejectionForSDJWT(t *testing.
 
 func TestValidateCredentialResponsePropagatesSignerRejectionForLDPVC(t *testing.T) {
 	original := verifyIssuedCredentialProof
-	verifyIssuedCredentialProof = func(_ context.Context, _ []byte, format string) error {
+	verifyIssuedCredentialProof = func(_ context.Context, _ []byte, format string, _ CredentialVerificationContext) error {
 		if format != "ldp_vc" {
 			t.Fatalf("unexpected format %q", format)
 		}
@@ -381,7 +377,7 @@ func TestVerifyCredentialWithSignerRejectsHTTPError(t *testing.T) {
 	previous := config.CurrentCredentialRetrievalConfig.SignerURL
 	config.CurrentCredentialRetrievalConfig.SignerURL = server.URL
 	t.Cleanup(func() { config.CurrentCredentialRetrievalConfig.SignerURL = previous })
-	err := verifyCredentialWithSigner(context.Background(), []byte("credential"), "dc+sd-jwt")
+	err := verifyCredentialWithSigner(context.Background(), []byte("credential"), "dc+sd-jwt", CredentialVerificationContext{})
 	if err == nil || !strings.Contains(err.Error(), "HTTP 503") {
 		t.Fatalf("expected signer HTTP error to fail closed, got %v", err)
 	}
@@ -396,7 +392,7 @@ func TestVerifyCredentialWithSignerRejectsMalformedResponse(t *testing.T) {
 	previous := config.CurrentCredentialRetrievalConfig.SignerURL
 	config.CurrentCredentialRetrievalConfig.SignerURL = server.URL
 	t.Cleanup(func() { config.CurrentCredentialRetrievalConfig.SignerURL = previous })
-	err := verifyCredentialWithSigner(context.Background(), []byte("credential"), "ldp_vc")
+	err := verifyCredentialWithSigner(context.Background(), []byte("credential"), "ldp_vc", CredentialVerificationContext{})
 	if err == nil || !strings.Contains(err.Error(), "decode signer verification response") {
 		t.Fatalf("expected malformed signer response to fail closed, got %v", err)
 	}
@@ -406,7 +402,7 @@ func TestVerifyCredentialWithSignerRequiresConfiguration(t *testing.T) {
 	previous := config.CurrentCredentialRetrievalConfig.SignerURL
 	config.CurrentCredentialRetrievalConfig.SignerURL = ""
 	t.Cleanup(func() { config.CurrentCredentialRetrievalConfig.SignerURL = previous })
-	if err := verifyCredentialWithSigner(context.Background(), []byte("credential"), "ldp_vc"); err == nil || !strings.Contains(err.Error(), "not configured") {
+	if err := verifyCredentialWithSigner(context.Background(), []byte("credential"), "ldp_vc", CredentialVerificationContext{}); err == nil || !strings.Contains(err.Error(), "not configured") {
 		t.Fatalf("expected missing signer configuration to fail, got %v", err)
 	}
 }
