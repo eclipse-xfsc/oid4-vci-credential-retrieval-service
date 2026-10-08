@@ -1,6 +1,7 @@
 package services
 
 import (
+	"bytes"
 	"compress/gzip"
 	"compress/zlib"
 	"context"
@@ -263,7 +264,16 @@ func verifyCredentialWithSigner(ctx context.Context, rawCredential []byte, forma
 		return errors.New("signer URL is not configured")
 	}
 	endpoint := strings.TrimRight(baseURL, "/") + "/v1/credential/verify"
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(string(rawCredential)))
+	payload := map[string]any{"credential": base64.StdEncoding.EncodeToString(rawCredential)}
+	if format == "dc+sd-jwt" {
+		// Keep the field present even if no frame was supplied by the caller.
+		payload["disclosureFrame"] = []string{}
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("marshal signer verification request: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("create signer verification request: %w", err)
 	}
@@ -277,7 +287,7 @@ func verifyCredentialWithSigner(ctx context.Context, rawCredential []byte, forma
 		return fmt.Errorf("call signer verification endpoint: %w", err)
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20+1))
+	body, err = io.ReadAll(io.LimitReader(resp.Body, 1<<20+1))
 	if err != nil {
 		return fmt.Errorf("read signer verification response: %w", err)
 	}

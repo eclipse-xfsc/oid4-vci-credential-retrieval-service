@@ -148,8 +148,10 @@ services:
       - internal
 
   sdjwt:
-    image: node-654e3bca7fbeeed18f81d7c7.de-west-1.xaas.plus.cloud/common-services/sd-jwt-service@sha256:877cc84ab74645e6f9229a52a668973bbf1c627fc6f1488de55eed246853040d
-    restart: unless-stopped
+    image: node-654e3bca7fbeeed18f81d7c7.de-west-1.xaas.plus.cloud/common-services/sd-jwt-service:1.2.8
+    environment: 
+       SIGNER_SIGN_URL: http://host.docker.internal:8080/v1/sign
+       RESOLVER_URL: http://resolver:8080/1.0/identifiers/
     expose:
       - "3000"
     ports:
@@ -157,8 +159,58 @@ services:
     networks:
       - internal
 
+  resolver:
+    image: universalresolver/uni-resolver-web:latest
+    container_name: universal-resolver
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      uniresolver_web_driver_url_did_jwk: "http://transmute-driver:8080"
+      uniresolver_web_driver_url_did_web: "http://transmute-driver:8080"
+      uniresolver_web_driver_url_did_peer: "http://uport-driver:8081"
+    depends_on:
+      - transmute-driver
+      - uport-driver
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - "curl -fsS http://localhost:8080/1.0/testIdentifiers > /dev/null || exit 1"
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    networks:
+      - internal
+
+  transmute-driver:
+    image: node-654e3bca7fbeeed18f81d7c7.ps-xaas.io/dev-ops/transmute-universal-resolver-driver:latest
+    container_name: transmute-driver
+    restart: unless-stopped
+    expose:
+      - "8080"
+    networks:
+      - internal
+
+  uport-driver:
+    image: uport/uni-resolver-driver-did-uport:4.3.0
+    container_name: uport-driver
+    restart: unless-stopped
+    expose:
+      - "8081"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - "curl -fsS http://localhost:8081/health > /dev/null || exit 1"
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    networks:
+      - internal
+
   signer:
-    image: node-654e3bca7fbeeed18f81d7c7.de-west-1.xaas.plus.cloud/tsa/signer:2.3.5
+    image: node-654e3bca7fbeeed18f81d7c7.de-west-1.xaas.plus.cloud/tsa/signer:2.3.7
     restart: unless-stopped
     depends_on:
       nats:
