@@ -30,7 +30,7 @@ type CredentialRetrievalConfig struct {
 
 	Migrations struct {
 		Enabled bool          `mapstructure:"enabled" envconfig:"ENABLED" default:"true"`
-		Table   string        `mapstructure:"table" envconfig:"TABLE" default:"schema_migrations"`
+		Table   string        `mapstructure:"table" envconfig:"TABLE" default:"retrieval_schema_migrations"`
 		Timeout time.Duration `mapstructure:"timeout" envconfig:"TIMEOUT" default:"2m"`
 	} `mapstructure:"migrations" envconfig:"MIGRATIONS"`
 }
