@@ -51,7 +51,8 @@ func setupClearanceDB(t *testing.T, requestID string) (*mockpkg.Database, *[]str
 		switch {
 		case strings.Contains(stmt, "SELECT requestId"):
 			return &mockpkg.Query{Rows: [][]interface{}{offeringRowValues(t, requestID)}}
-		case strings.Contains(stmt, "DELETE"), strings.Contains(stmt, "UPDATE ocm.offerings SET"):
+		case strings.Contains(stmt, "DELETE"),
+			strings.Contains(stmt, "UPDATE ocm.offerings"):
 			executed = append(executed, stmt)
 			return &mockpkg.Query{}
 		default:
@@ -96,7 +97,7 @@ func TestClearOfferingAcceptStoresCredentialAndMarksOfferingAccepted(t *testing.
 	oldStore := storeAcceptedCredential
 	fetchCredentialDataForAcceptance = func(ctx context.Context, tenantID, groupID string, row types.OfferingRow, acceptance types.Acceptance) (*credential.CredentialResponse, error) {
 		require.Equal(t, "tenant_a", tenantID)
-		require.Equal(t, "tenant_a", groupID)
+		require.Equal(t, "group-123", groupID)
 		require.Equal(t, "request-2", row.RequestId)
 		require.True(t, acceptance.Accept)
 		return &expected, nil
@@ -121,7 +122,7 @@ func TestClearOfferingAcceptStoresCredentialAndMarksOfferingAccepted(t *testing.
 	require.True(t, stored)
 	require.Same(t, &expected, response)
 	require.Len(t, *executed, 1)
-	require.Contains(t, (*executed)[0], "status=?")
+	require.Contains(t, (*executed)[0], "status = ?")
 }
 
 func TestClearOfferingAcceptDoesNotMarkAcceptedWhenStorageFails(t *testing.T) {
@@ -149,31 +150,52 @@ func TestClearOfferingAcceptDoesNotMarkAcceptedWhenStorageFails(t *testing.T) {
 func TestStoreOfferingPersistsReceivedStatusUsingDatabaseAdapter(t *testing.T) {
 	oldRegion := config.CurrentCredentialRetrievalConfig.Region
 	oldCountry := config.CurrentCredentialRetrievalConfig.Country
+
 	config.CurrentCredentialRetrievalConfig.Region = "eu"
 	config.CurrentCredentialRetrievalConfig.Country = "de"
+
 	t.Cleanup(func() {
 		config.CurrentCredentialRetrievalConfig.Region = oldRegion
 		config.CurrentCredentialRetrievalConfig.Country = oldCountry
 	})
 
 	db := &mockpkg.Database{}
+
 	var statement string
 	var values []interface{}
+
 	db.QueryFunc = func(stmt string, bound ...interface{}) connection.QueryInterface {
 		statement = stmt
 		values = append([]interface{}(nil), bound...)
 		return &mockpkg.Query{}
 	}
+
 	oldSession := common.GetEnvironment().GetSession()
 	common.GetEnvironment().SetSession(db)
-	t.Cleanup(func() { common.GetEnvironment().SetSession(oldSession) })
 
-	offering := types.OfferingRow{GroupId: "group-123", RequestId: "request-4"}
+	t.Cleanup(func() {
+		common.GetEnvironment().SetSession(oldSession)
+	})
+
+	offering := types.OfferingRow{
+		GroupId:   "group-123",
+		RequestId: "request-4",
+	}
+
 	err := StoreOffering("tenant_a", offering)
+
 	require.NoError(t, err)
-	require.Contains(t, statement, "status='received'")
-	require.Contains(t, statement, "UPDATE ocm.offerings")
-	require.Len(t, values, 8)
+
+	normalized := strings.Join(strings.Fields(statement), " ")
+
+	require.Contains(t, normalized, "UPDATE ocm.offerings")
+	require.Contains(t, normalized, "status = 'received'")
+
+	require.Len(t, values, 9)
+
+	require.Equal(t, "eu", values[4])
+	require.Equal(t, "de", values[5])
 	require.Equal(t, "group-123", values[6])
-	require.Equal(t, "request-4", values[7])
+	require.Equal(t, "tenant_a", values[7])
+	require.Equal(t, "request-4", values[8])
 }

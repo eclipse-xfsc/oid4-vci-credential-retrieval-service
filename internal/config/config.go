@@ -14,6 +14,7 @@ type CredentialRetrievalConfig struct {
 	OfferingTopic            string   `envconfig:"OFFERING_TOPIC"`
 	StoringTopic             string   `envconfig:"STORAGE_TOPIC"`
 	SignerTopic              string   `envconfig:"SIGNER_TOPIC"`
+	SignerURL                string   `mapstructure:"signerUrl" envconfig:"SIGNER_URL"`
 	OfferingPolicy           string   `envconfig:"OFFERINGPOLICY"`
 	MetadataPolicy           string   `envconfig:"METADATAPOLICY"`
 	DisableTLS               bool     `envconfig:"DISABLETLS"`
