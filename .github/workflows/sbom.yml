@@ -15,4 +15,4 @@ jobs:
   call-remote-workflow:
     uses: eclipse-xfsc/dev-ops/.github/workflows/sbom-golang.yml@main
     secrets:
-      GH_TOKEN: ${{ github.GITHUB_TOKEN }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
