@@ -8,11 +8,11 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
   actions: write
 
 jobs:
   call-remote-workflow:
     uses: eclipse-xfsc/dev-ops/.github/workflows/sbom-golang.yml@main
     secrets:
-      GH_TOKEN: ${{ github.token }}
+      GH_TOKEN: ${{ github.GITHUB_TOKEN }}
