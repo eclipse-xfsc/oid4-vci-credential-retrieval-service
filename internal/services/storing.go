@@ -72,7 +72,7 @@ var newStorageMessagePublisher = func() (storageMessagePublisher, error) {
 
 // StoreCredential stores the OID4VCI 1.0 credentials array. Each credential is
 // emitted as an individual storage message so batch issuance does not lose items.
-func StoreCredential(tenantId, requestId, groupId string, response credential.CredentialResponse, pub jwk.Key, ctx context.Context) error {
+func StoreCredential(tenantId, requestId, groupId, region, country string, response credential.CredentialResponse, pub jwk.Key, ctx context.Context) error {
 	log = ctxPkg.GetLogger(ctx)
 	if len(response.Credentials) == 0 {
 		return errors.New("credential response contains no immediately issued credentials")
@@ -101,8 +101,14 @@ func StoreCredential(tenantId, requestId, groupId string, response credential.Cr
 		}
 
 		storemessage := messaging.StorageServiceStoreMessage{
-			Request: common.Request{TenantId: tenantId, RequestId: requestId, GroupId: groupId},
-			Id:      uuid.NewString(), AccountId: groupId, Type: "credential", Payload: payload, ContentType: contentType,
+			Request:     common.Request{TenantId: tenantId, RequestId: requestId, GroupId: groupId},
+			Id:          uuid.NewString(),
+			AccountId:   groupId,
+			Type:        "credential",
+			Payload:     payload,
+			ContentType: contentType,
+			Region:      region,
+			Country:     country,
 		}
 		if err := publisher.Publish(ctx, storemessage); err != nil {
 			return err

@@ -66,7 +66,7 @@ func TestStoreCredentialPublishesEveryAcceptedCredential(t *testing.T) {
 	newStorageMessagePublisher = func() (storageMessagePublisher, error) { return publisher, nil }
 	t.Cleanup(func() { newStorageMessagePublisher = oldFactory })
 
-	err := StoreCredential("tenant-a", "request-a", "group-a", response, nil, context.Background())
+	err := StoreCredential("tenant-a", "request-a", "group-a", "EU", "DE", response, nil, context.Background())
 	require.NoError(t, err)
 	require.Len(t, publisher.Messages, 2)
 
@@ -91,6 +91,6 @@ func TestStoreCredentialPropagatesPublisherFailure(t *testing.T) {
 	newStorageMessagePublisher = func() (storageMessagePublisher, error) { return publisher, nil }
 	t.Cleanup(func() { newStorageMessagePublisher = oldFactory })
 
-	err := StoreCredential("tenant-a", "request-a", "group-a", response, nil, context.Background())
+	err := StoreCredential("tenant-a", "request-a", "group-a", "EU", "DE", response, nil, context.Background())
 	require.ErrorContains(t, err, "broker unavailable")
 }

@@ -161,12 +161,15 @@ func HandleClearance(ctx *gin.Context) {
 		return
 	}
 
-	resp, err := services.ClearOffering(tenantId, requestId, groupId, accept, ctx.Request.Context())
-	
+	region := common.GetEnvironment().GetRegion()
+	country := common.GetEnvironment().GetCountry()
+
+	resp, err := services.ClearOffering(tenantId, requestId, groupId, region, country, accept, ctx.Request.Context())
+
 	if err != nil {
-	    log.Error(err, "error occurred while clearing offering")
-	    ctx.JSON(400, gin.H{"error": err.Error()})
-	    return
+		log.Error(err, "error occurred while clearing offering")
+		ctx.JSON(400, gin.H{"error": err.Error()})
+		return
 	}
 
 	ctx.JSON(200, resp)

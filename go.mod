@@ -6,7 +6,7 @@ require (
 	github.com/cloudevents/sdk-go/v2 v2.16.2
 	github.com/eclipse-xfsc/cloud-event-provider v0.1.5
 	github.com/eclipse-xfsc/microservice-core-go v1.1.1
-	github.com/eclipse-xfsc/nats-message-library v1.3.1
+	github.com/eclipse-xfsc/nats-message-library v1.5.1
 	github.com/eclipse-xfsc/oid4-vci-vp-library v1.8.1
 	github.com/eclipse-xfsc/ssi-jwt v1.2.1
 	github.com/gin-gonic/gin v1.11.0

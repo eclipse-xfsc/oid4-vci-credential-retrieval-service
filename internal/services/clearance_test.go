@@ -82,7 +82,7 @@ func TestClearOfferingRejectDeletesOfferingWithoutFetchingCredential(t *testing.
 	}
 	t.Cleanup(func() { fetchCredentialDataForAcceptance = oldFetch })
 
-	response, err := ClearOffering("tenant_a", "request-1", "group-123", types.Acceptance{Accept: false}, context.Background())
+	response, err := ClearOffering("tenant_a", "request-1", "group-123", "EU", "DE", types.Acceptance{Accept: false}, context.Background())
 	require.NoError(t, err)
 	require.Nil(t, response)
 	require.Len(t, *executed, 1)
@@ -103,7 +103,7 @@ func TestClearOfferingAcceptStoresCredentialAndMarksOfferingAccepted(t *testing.
 		return &expected, nil
 	}
 	stored := false
-	storeAcceptedCredential = func(tenantID, requestID, groupID string, response credential.CredentialResponse, pub jwk.Key, ctx context.Context) error {
+	storeAcceptedCredential = func(tenantID, requestID, groupID, region, country string, response credential.CredentialResponse, pub jwk.Key, ctx context.Context) error {
 		stored = true
 		require.Equal(t, "tenant_a", tenantID)
 		require.Equal(t, "request-2", requestID)
@@ -117,7 +117,7 @@ func TestClearOfferingAcceptStoresCredentialAndMarksOfferingAccepted(t *testing.
 		storeAcceptedCredential = oldStore
 	})
 
-	response, err := ClearOffering("tenant_a", "request-2", "group-123", types.Acceptance{Accept: true}, context.Background())
+	response, err := ClearOffering("tenant_a", "request-2", "group-123", "EU", "DE", types.Acceptance{Accept: true}, context.Background())
 	require.NoError(t, err)
 	require.True(t, stored)
 	require.Same(t, &expected, response)
@@ -133,7 +133,7 @@ func TestClearOfferingAcceptDoesNotMarkAcceptedWhenStorageFails(t *testing.T) {
 	fetchCredentialDataForAcceptance = func(context.Context, string, string, types.OfferingRow, types.Acceptance) (*credential.CredentialResponse, error) {
 		return &expected, nil
 	}
-	storeAcceptedCredential = func(string, string, string, credential.CredentialResponse, jwk.Key, context.Context) error {
+	storeAcceptedCredential = func(string, string, string, string, string, credential.CredentialResponse, jwk.Key, context.Context) error {
 		return errors.New("nats unavailable")
 	}
 	t.Cleanup(func() {
@@ -141,7 +141,7 @@ func TestClearOfferingAcceptDoesNotMarkAcceptedWhenStorageFails(t *testing.T) {
 		storeAcceptedCredential = oldStore
 	})
 
-	response, err := ClearOffering("tenant_a", "request-3", "group-123", types.Acceptance{Accept: true}, context.Background())
+	response, err := ClearOffering("tenant_a", "request-3", "group-123", "EU", "DE", types.Acceptance{Accept: true}, context.Background())
 	require.Nil(t, response)
 	require.ErrorContains(t, err, "failed to store accepted credential")
 	require.Empty(t, *executed, "status must remain unchanged when storage publication fails")

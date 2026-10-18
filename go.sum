@@ -73,6 +73,10 @@ github.com/eclipse-xfsc/microservice-core-go v1.1.1 h1:G3PEu2N+/I9ije1gnPEUkOr27
 github.com/eclipse-xfsc/microservice-core-go v1.1.1/go.mod h1:YRLyt66TYC1Km40w6oagYrXjrMCyI1tym2wGEgWQ9pI=
 github.com/eclipse-xfsc/nats-message-library v1.3.1 h1:LLUHOzr0jK37vwG47DOkHLu2glrpM9wFH7Gr2BL4u78=
 github.com/eclipse-xfsc/nats-message-library v1.3.1/go.mod h1:1wRcQ7pBzscQLfwYy25TM8yeCNGO+2u6NFkmKZYEd5g=
+github.com/eclipse-xfsc/nats-message-library v1.4.3 h1:htNoUcMO7riwtjujBgH9xI4JmhYYTpc1FjNFz+xacN0=
+github.com/eclipse-xfsc/nats-message-library v1.4.3/go.mod h1:1wRcQ7pBzscQLfwYy25TM8yeCNGO+2u6NFkmKZYEd5g=
+github.com/eclipse-xfsc/nats-message-library v1.5.1 h1:JmVmsfI7OUXKdO5x+otk1T1hZAh7UdE5KmAxOfr1I9k=
+github.com/eclipse-xfsc/nats-message-library v1.5.1/go.mod h1:vOqJUxJnd3K2iP++cO3erFUIl7z6XGUn2gvHlaJ8wkM=
 github.com/eclipse-xfsc/oid4-vci-vp-library v1.6.5 h1:MpOhZo7rXOIUTmXBYg2JYL4Qkogv3Uzc0x0QpBkA08I=
 github.com/eclipse-xfsc/oid4-vci-vp-library v1.6.5/go.mod h1:0SLW2+MoLNnK0XaUGJlWxrzQbkWVDLHwxKALqm3LPCk=
 github.com/eclipse-xfsc/oid4-vci-vp-library v1.6.6 h1:1/nGnnmSXMEkDJxZJe4bInhueeyQK795XSdu3Ve/jFo=

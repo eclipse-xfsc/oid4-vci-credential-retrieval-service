@@ -39,9 +39,12 @@ func handleMessage(event event.Event) {
 			return
 		}
 
+		region := common.GetEnvironment().GetRegion()
+		country := common.GetEnvironment().GetCountry()
+
 		log.Info(fmt.Sprintf("new offering received: %v", acceptance))
 
-		services.ClearOffering(acceptance.TenantId, acceptance.RequestId, acceptance.GroupId, types.Acceptance{
+		services.ClearOffering(acceptance.TenantId, acceptance.RequestId, acceptance.GroupId, region, country, types.Acceptance{
 			Accept:          acceptance.Result,
 			HolderKey:       acceptance.HolderKey,
 			HolderNamespace: acceptance.HolderNamespace,

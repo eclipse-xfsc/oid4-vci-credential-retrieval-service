@@ -199,6 +199,8 @@ func ClearOffering(
 	tenantId string,
 	requestId string,
 	groupId string,
+	region string,
+	country string,
 	acceptance types.Acceptance,
 	ctx context.Context,
 ) (*credential.CredentialResponse, error) {
@@ -349,6 +351,8 @@ func ClearOffering(
 		tenantId,
 		requestId,
 		groupId,
+		region,
+		country,
 		*response,
 		nil,
 		ctx,
